@@ -1,0 +1,6 @@
+# Extra dependencies for the standalone dark_crawler.py CLI
+-r requirements.txt
+
+stem==1.8.2          # Tor control
+nltk==3.8.1          # Natural language processing
+Pillow==10.2.0       # Image processing

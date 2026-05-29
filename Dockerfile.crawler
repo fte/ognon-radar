@@ -1,0 +1,16 @@
+# Dark Crawler CLI - Docker Image (includes extra deps: stem, nltk, Pillow)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-crawler.txt requirements.txt ./
+RUN pip install --no-cache-dir -r requirements-crawler.txt
+
+COPY . .
+
+RUN useradd -m -u 1000 crawluser && chown -R crawluser:crawluser /app
+USER crawluser

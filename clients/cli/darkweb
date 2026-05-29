@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# darkweb — curl client for the DarkWeb Search API
+#
+# Usage:
+#   darkweb [--dry-run] [--host HOST] COMMAND [options]
+#
+# Commands:
+#   health
+#   search TERM [--url URL] [--depth N] [--pages N] [--results N] [--timeout N] [--client ID]
+#   poll   JOB_ID [--interval N] [--offset N] [--limit N]
+#   jobs   [--status STATUS] [--limit N] [--offset N] [--client ID]
+#   job    JOB_ID [--offset N] [--limit N]
+#   cancel JOB_ID
+#   delete JOB_ID
+#   purge  [--status STATUS]
+#
+# Flags:
+#   --dry-run       Print the curl command without executing it
+#   --host HOST     API base URL (default: http://localhost:8337)
+#   --help, -h      Show this help
+#
+# Typical flow:
+#   darkweb search cybersec --depth 2
+#   darkweb poll <job_id>                 ← waits until done, shows results
+#   darkweb job  <job_id> --offset 20 --limit 20   ← paginate
+
+set -euo pipefail
+
+# ── colours ──────────────────────────────────────────────────────────
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+CYAN=$'\033[1;36m'
+YELLOW=$'\033[1;33m'
+GREEN=$'\033[1;32m'
+RED=$'\033[1;31m'
+RESET=$'\033[0m'
+
+# ── defaults ─────────────────────────────────────────────────────────
+HOST="http://localhost:8337"
+LIVE=true
+LAST_BODY=""   # set by run(); read by cmd_search for the poll hint
+
+# ── helpers ──────────────────────────────────────────────────────────
+die()  { echo "${RED}error:${RESET} $*" >&2; exit 1; }
+
+print_cmd() {
+    local cmd=("$@")
+    echo
+    if $LIVE; then
+        echo "${CYAN}${BOLD}▶ curl${RESET}"
+    else
+        echo "${YELLOW}${BOLD}◆ curl (dry-run)${RESET}"
+    fi
+    echo -n "  ${BOLD}curl${RESET}"
+    local i=1
+    while [[ $i -lt ${#cmd[@]} ]]; do
+        local arg="${cmd[$i]}"
+        if [[ "$arg" == -* ]] && [[ $((i+1)) -lt ${#cmd[@]} ]] && [[ "${cmd[$((i+1))]}" != -* ]]; then
+            echo -n " ${GREEN}${arg}${RESET} ${cmd[$((i+1))]}"
+            ((i+=2))
+        else
+            echo -n " ${GREEN}${arg}${RESET}"
+            ((i+=1))
+        fi
+    done
+    echo
+    echo
+}
+
+run() {
+    local -a args=("$@")
+    print_cmd "${args[@]}"
+    LAST_BODY=""
+
+    if $LIVE; then
+        local output http_code body
+        output=$(curl --silent --show-error \
+            --write-out '\n%{http_code}' \
+            "${args[@]:1}" 2>&1) || true
+
+        http_code=$(tail -n1 <<< "$output")
+        body=$(sed '$d' <<< "$output")
+        LAST_BODY="$body"
+
+        local code_colour="$GREEN"
+        [[ "$http_code" -ge 400 ]] && code_colour="$RED"
+
+        echo "  ${BOLD}HTTP ${code_colour}${http_code}${RESET}"
+        echo
+
+        if command -v jq &>/dev/null && [[ -n "$body" ]]; then
+            echo "$body" | jq . 2>/dev/null || echo "$body"
+        else
+            echo "$body"
+        fi
+        echo
+    fi
+}
+
+# Extract a JSON string field — uses jq when available, grep fallback
+json_field() {
+    local body="$1" field="$2"
+    if command -v jq &>/dev/null; then
+        echo "$body" | jq -r ".${field} // empty" 2>/dev/null
+    else
+        echo "$body" | grep -o "\"${field}\":\"[^\"]*\"" | head -1 | cut -d'"' -f4
+    fi
+}
+
+usage() {
+    sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
+    exit 0
+}
+
+# ── parse global flags ────────────────────────────────────────────────
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) LIVE=false;      shift ;;
+        --host)    HOST="${2:?}";   shift 2 ;;
+        --help|-h) usage ;;
+        *)         ARGS+=("$1");    shift ;;
+    esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+[[ $# -lt 1 ]] && usage
+
+CMD="$1"; shift
+
+# ── commands ─────────────────────────────────────────────────────────
+
+cmd_health() {
+    run curl \
+        --request GET \
+        --url "${HOST}/api/v1/health" \
+        --header "Accept: application/json"
+}
+
+cmd_search() {
+    [[ $# -lt 1 ]] && die "search requires TERM"
+    local term="$1"; shift
+    local url="" depth="" pages="" results="" timeout="" client=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --url)      url="$2";     shift 2 ;;
+            --depth)    depth="$2";   shift 2 ;;
+            --pages)    pages="$2";   shift 2 ;;
+            --results)  results="$2"; shift 2 ;;
+            --timeout)  timeout="$2"; shift 2 ;;
+            --client)   client="$2";  shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local body="{\"term\":\"${term}\""
+    [[ -n "$url"     ]] && body+=",\"start_url\":\"${url}\""
+    [[ -n "$depth"   ]] && body+=",\"max_depth\":${depth}"
+    [[ -n "$pages"   ]] && body+=",\"max_pages\":${pages}"
+    [[ -n "$results" ]] && body+=",\"max_results\":${results}"
+    [[ -n "$timeout" ]] && body+=",\"timeout\":${timeout}"
+    body+="}"
+
+    local -a extra_headers=()
+    [[ -n "$client" ]] && extra_headers=(--header "X-Client-ID: ${client}")
+
+    run curl \
+        --request POST \
+        --url "${HOST}/api/v1/search" \
+        --header "Content-Type: application/json" \
+        --header "Accept: application/json" \
+        "${extra_headers[@]+"${extra_headers[@]}"}" \
+        --data "${body}"
+
+    # After submit, show the poll command to use next
+    if $LIVE && [[ -n "$LAST_BODY" ]]; then
+        local job_id
+        job_id=$(json_field "$LAST_BODY" "job_id")
+        if [[ -n "$job_id" ]]; then
+            echo "${DIM}→ suivre :${RESET}  ${BOLD}$0 poll ${job_id}${RESET}"
+            echo
+        fi
+    fi
+}
+
+cmd_poll() {
+    [[ $# -lt 1 ]] && die "poll requires JOB_ID"
+    local job_id="$1"; shift
+    local interval=2
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --interval) interval="$2"; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local url="${HOST}/api/v1/jobs/${job_id}/stream?interval=${interval}"
+
+    echo
+    echo "${CYAN}${BOLD}⏳ streaming ${job_id}${RESET}"
+    echo
+
+    local final_status=""
+
+    while IFS= read -r line; do
+        [[ "$line" != data:* ]] && continue
+        local body="${line#data: }"
+        local status ts
+        status=$(json_field "$body" "status")
+        ts=$(date '+%H:%M:%S')
+
+        case "$status" in
+            completed)
+                echo "${GREEN}${BOLD}✓ [${ts}] completed${RESET}"
+                echo
+                if command -v jq &>/dev/null; then echo "$body" | jq .; else echo "$body"; fi
+                echo
+                final_status="completed"
+                ;;
+            failed)
+                echo "${RED}${BOLD}✗ [${ts}] failed${RESET}"
+                echo
+                if command -v jq &>/dev/null; then echo "$body" | jq .; else echo "$body"; fi
+                echo
+                final_status="failed"
+                ;;
+            cancelled)
+                echo "${YELLOW}${BOLD}— [${ts}] cancelled${RESET}"
+                echo
+                final_status="cancelled"
+                ;;
+            queued|running)
+                echo "${DIM}  [${ts}] ${status}...${RESET}"
+                ;;
+            *)
+                echo "${DIM}  [${ts}] ${status:-unknown}${RESET}"
+                ;;
+        esac
+    done < <(curl --no-buffer --silent --show-error \
+        --request GET \
+        --url "${url}" \
+        --header "Accept: text/event-stream" 2>&1)
+
+    [[ "$final_status" == "failed" ]] && exit 1
+    return 0
+}
+
+cmd_jobs() {
+    local status="" limit="" offset="" client=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --status) status="$2"; shift 2 ;;
+            --limit)  limit="$2";  shift 2 ;;
+            --offset) offset="$2"; shift 2 ;;
+            --client) client="$2"; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local query=""
+    [[ -n "$status" ]] && query+="status=${status}&"
+    [[ -n "$limit"  ]] && query+="limit=${limit}&"
+    [[ -n "$offset" ]] && query+="offset=${offset}&"
+    query="${query%&}"
+    local url="${HOST}/api/v1/jobs"
+    [[ -n "$query" ]] && url+="?${query}"
+
+    local -a extra_headers=()
+    [[ -n "$client" ]] && extra_headers=(--header "X-Client-ID: ${client}")
+
+    run curl \
+        --request GET \
+        --url "${url}" \
+        --header "Accept: application/json" \
+        "${extra_headers[@]+"${extra_headers[@]}"}"
+}
+
+cmd_job() {
+    [[ $# -lt 1 ]] && die "job requires JOB_ID"
+    local job_id="$1"; shift
+    local offset="" limit=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --offset) offset="$2"; shift 2 ;;
+            --limit)  limit="$2";  shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local url="${HOST}/api/v1/jobs/${job_id}"
+    local query=""
+    [[ -n "$offset" ]] && query+="offset=${offset}&"
+    [[ -n "$limit"  ]] && query+="limit=${limit}&"
+    query="${query%&}"
+    [[ -n "$query"  ]] && url+="?${query}"
+
+    run curl --request GET --url "${url}" --header "Accept: application/json"
+}
+
+cmd_cancel() {
+    [[ $# -lt 1 ]] && die "cancel requires JOB_ID"
+    run curl \
+        --request POST \
+        --url "${HOST}/api/v1/jobs/${1}/cancel" \
+        --header "Accept: application/json"
+}
+
+cmd_delete() {
+    [[ $# -lt 1 ]] && die "delete requires JOB_ID"
+    run curl \
+        --request DELETE \
+        --url "${HOST}/api/v1/jobs/${1}" \
+        --header "Accept: application/json"
+}
+
+cmd_purge() {
+    local status=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --status) status="$2"; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local url="${HOST}/api/v1/jobs"
+    [[ -n "$status" ]] && url+="?status=${status}"
+
+    run curl \
+        --request DELETE \
+        --url "${url}" \
+        --header "Accept: application/json"
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────
+case "$CMD" in
+    health)  cmd_health  "$@" ;;
+    search)  cmd_search  "$@" ;;
+    poll)    cmd_poll    "$@" ;;
+    jobs)    cmd_jobs    "$@" ;;
+    job)     cmd_job     "$@" ;;
+    cancel)  cmd_cancel  "$@" ;;
+    delete)  cmd_delete  "$@" ;;
+    purge)   cmd_purge   "$@" ;;
+    *)       die "unknown command: ${CMD}. Try --help" ;;
+esac

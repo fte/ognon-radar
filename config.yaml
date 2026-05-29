@@ -1,0 +1,54 @@
+# DarkWeb API Configuration
+
+# API Settings
+api:
+  title: "DarkWeb Search API"
+  version: "1.0.0"
+  description: "REST API for searching .onion sites via Tor network"
+  host: "0.0.0.0"
+  port: 8000
+
+# Tor Configuration
+tor:
+  proxy: "socks5h://tor:9050"
+  check_url: "http://check.torproject.org/"
+
+# Crawling Settings
+crawling:
+  delay: 7  # Seconds between requests
+  max_depth: 2
+  max_pages: 50
+  max_results: 10
+  timeout: 30  # Request timeout in seconds
+  
+  # Default seed URLs for crawling (well-known .onion sites)
+  seed_urls:
+    # Search engines
+    - "http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion"  # Ahmia
+    - "http://xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion"  # Torch
+    - "http://tordexpmg4xy32rfp4ovnz7zq5ujoejwq2u26uxxtkscgo5u3losmeid.onion"  # TorDex
+    - "http://haystak5njsmn2hqkewecpaxetahtwhsbsa64jom2k22z5afxhnpxfid.onion"  # Haystak
+    - "http://notevil2ebbr5xjww6nryjta7bycbriyi2vh7an3wcuovlznvobykmad.onion"  # Not Evil
+    - "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"  # DuckDuckGo
+    # Directories
+    - "http://p53lf57qovyuvwsc6xnrppyply3vtqm7l6pcobkmyqsiofyeznfu5uqd.onion"  # ProPublica
+    - "http://zqktlwiuavvvqqt4ybvgvi7tyo4hjl5xgfuvpdf6otjiycgwqbym2qad.onion"  # Hidden Wiki
+
+# Retry Configuration
+retry:
+  count: 3
+  backoff_factor: 4
+
+# Security
+security:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+
+# CORS
+cors:
+  origins:
+    - "*"  # Configure properly for production
+
+# Job Queue Settings
+jobs:
+  max_workers: 2         # Concurrent crawl threads
+  db_path: "/app/data/jobs.db"  # SQLite job store

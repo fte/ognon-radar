@@ -1,0 +1,80 @@
+
+services:
+  # Tor SOCKS5 proxy container
+  tor:
+    image: dperson/torproxy:latest
+    container_name: darkweb-tor
+    restart: unless-stopped
+    ports:
+      - "9050:9050"  # SOCKS5 proxy
+    environment:
+      - TOR_MaxCircuitDirtiness=60
+    networks:
+      - darkweb-net
+    healthcheck:
+      test: ["CMD", "curl", "--socks5", "localhost:9050", "--fail", "http://check.torproject.org/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # FastAPI application
+  api:
+    build: .
+    container_name: darkweb-api
+    restart: unless-stopped
+    ports:
+      - "8337:8000"
+    volumes:
+      # Mount config file
+      - ./config.yaml:/app/config.yaml:ro
+      # Mount for development (comment out for production)
+      - .:/app
+      # Job database persistence
+      - job-data:/app/data
+    depends_on:
+      tor:
+        condition: service_healthy
+    networks:
+      - darkweb-net
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Dark Crawler CLI (original script)
+  crawler:
+    build:
+      context: .
+      dockerfile: Dockerfile.crawler
+    container_name: darkweb-crawler
+    volumes:
+      - .:/app
+      - ./crawler_output:/app/output  # Output directory for reports
+    depends_on:
+      tor:
+        condition: service_healthy
+    networks:
+      - darkweb-net
+    profiles:
+      - crawler  # Only start with: docker-compose --profile crawler up
+    # Example: docker-compose --profile crawler run --rm crawler python dark_crawler.py -u http://xxx.onion --json
+    entrypoint: []  # Override to allow custom commands
+
+  # Load testing (optional)
+  locust:
+    image: locustio/locust
+    container_name: darkweb-locust
+    ports:
+      - "8089:8089"
+    volumes:
+      - .:/mnt/locust
+    command: -f /mnt/locust/locustfile.py --host http://api:8000
+    networks:
+      - darkweb-net
+    profiles:
+      - testing  # Only start with: docker-compose --profile testing up
+
+networks:
+  darkweb-net:
+    driver: bridge
+
+volumes:
+  job-data:
