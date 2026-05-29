@@ -1,4 +1,4 @@
-# DarkWeb Search API
+# ognon-radar
 
 RESTful API for searching .onion (Tor hidden services) sites. Built with FastAPI and Docker.
 
@@ -22,8 +22,8 @@ RESTful API for searching .onion (Tor hidden services) sites. Built with FastAPI
 
 ```bash
 # Clone repository
-git clone https://github.com/fte/darkweb-api.git
-cd darkweb-api
+git clone https://github.com/fte/ognon-radar.git
+cd ognon-radar
 
 # (Optional) Customize config.yaml with your settings
 
@@ -170,7 +170,7 @@ docker-compose --profile testing up
 ## 🏗️ Project Structure
 
 ```
-darkweb-api/
+ognon-radar/
 ├── main.py              # FastAPI application entry point
 ├── config.py            # Configuration management
 ├── core/
@@ -304,4 +304,4 @@ For security issues or questions:
 
 ---
 
-**DarkWeb Search API** | For Authorized Security Research Only
+**ognon-radar** | For Authorized Security Research Only

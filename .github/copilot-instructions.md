@@ -1,4 +1,4 @@
-# DarkWeb API - Copilot Instructions
+# ognon-radar - Copilot Instructions
 
 ## Project Overview
 
@@ -24,7 +24,7 @@ This is a **REST API** for crawling and searching .onion (Tor hidden services) s
 
 ### 3. Code Organization
 ```
-/Users/fabrice/dev/darkweb-api/
+ognon-radar/
 ├── main.py                 # FastAPI application entry point
 ├── core/                   # Business logic
 │   ├── tor_client.py      # Tor SOCKS5 proxy client
