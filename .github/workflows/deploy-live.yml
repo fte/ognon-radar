@@ -12,20 +12,90 @@ jobs:
     environment: live
 
     steps:
-      - name: Debug SSH Key
+      - name: Validate required secrets
         run: |
-          echo "VPS_HOST: ${{ secrets.VPS_HOST }}"
-          echo "VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}"
-          echo "VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}"
-          echo "SSH Key length: ${#VPS_SSH_KEY}"
+          set -euo pipefail
+
+          missing=0
+          for name in VPS_HOST VPS_PATH VPS_SSH_KEY; do
+            value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              echo "Missing required secret: $name"
+              missing=1
+            fi
+          done
+
+          if [[ -z "${VPS_SSH_USER:-}" ]]; then
+            echo "Missing required secret: VPS_SSH_USER"
+            missing=1
+          fi
+
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+          echo "Secrets presence: OK"
+          echo "Host length: ${#VPS_HOST}"
+          echo "Path length: ${#VPS_PATH}"
+          ssh_user="${VPS_SSH_USER:-}"
+          echo "Port value: ${VPS_SSH_PORT:-22}"
+          echo "Selected user length: ${#ssh_user}"
+          echo "SSH key length: ${#VPS_SSH_KEY}"
         env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: SSH preflight debug (fingerprint + auth test)
+        run: |
+          set -euo pipefail
+
+          SSH_USER="${VPS_SSH_USER:-}"
+          SSH_PORT="${VPS_SSH_PORT:-22}"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Preserve line breaks, remove potential CRLF from pasted secret.
+          printf '%s\n' "$VPS_SSH_KEY" | sed 's/\r$//' > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          echo "Private key header: $(head -n 1 ~/.ssh/id_deploy)"
+          echo "Private key footer: $(tail -n 1 ~/.ssh/id_deploy)"
+          ssh-keygen -lf ~/.ssh/id_deploy
+
+          ssh-keyscan -p "$SSH_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 644 ~/.ssh/known_hosts
+
+          echo "Testing SSH authentication..."
+          set +e
+          ssh -vvv -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes -p "$SSH_PORT" -i ~/.ssh/id_deploy "$SSH_USER@$VPS_HOST" 'echo SSH_OK && whoami'
+          rc=$?
+          set -e
+
+          if [[ "$rc" -ne 0 ]]; then
+            echo "SSH preflight failed with code $rc"
+            echo "Most likely causes:"
+            echo "1) Public key not present in ~/.ssh/authorized_keys for the target user"
+            echo "2) Wrong target user secret (VPS_USER/VPS_SSH_USER)"
+            echo "3) Private key in secret does not match the installed public key"
+            exit "$rc"
+          fi
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_SSH_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
           port: ${{ secrets.VPS_SSH_PORT || '22' }}
           debug: true
           script: |
