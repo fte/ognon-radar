@@ -2,6 +2,7 @@
 Configuration management for DarkWeb API.
 All settings are loaded from YAML configuration file.
 """
+import os
 import yaml
 from pathlib import Path
 from typing import List
@@ -70,4 +71,4 @@ class Settings:
 
 
 # Global settings instance
-settings = Settings()
+settings = Settings(os.getenv('APP_CONFIG_PATH', 'config.yaml'))

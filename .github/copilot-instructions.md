@@ -6,6 +6,13 @@ This is a **REST API** for crawling and searching .onion (Tor hidden services) s
 
 **Primary Goal**: Provide RESTful endpoints to search for .onion sites containing specific keywords and capture screenshots.
 
+## Security Redaction Rule (Mandatory)
+
+When generating documentation, checklists, or example commands intended for sharing:
+- Always anonymize users, paths, hostnames, domains/FQDNs, and IP addresses.
+- Use placeholders (for example: `<DEPLOY_USER>`, `<APP_DIR>`, `<VPS_HOST>`, `<API_FQDN>`).
+- Do not include real infrastructure identifiers in tracked Markdown docs.
+
 ## Architecture Principles
 
 ### 1. REST API Best Practices

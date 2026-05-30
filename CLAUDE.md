@@ -69,6 +69,14 @@ For multi-step tasks, state a brief plan:
 - If a test is wrong (testing the wrong thing), explain why before touching it.
 - New behaviour must have a corresponding test. No untested public-facing logic.
 
+### 6. Mandatory Anonymization In Shared Artifacts
+
+When producing documentation, checklists, examples, or chat-ready snippets:
+- Always anonymize usernames, hostnames, domains/FQDNs, IPs, and absolute paths.
+- Use placeholders like `<DEPLOY_USER>`, `<VPS_HOST>`, `<API_FQDN>`, `<APP_DIR>`.
+- Do not commit real infrastructure identifiers in Markdown files.
+- Keep real values in secrets/local environment only.
+
 ---
 
 ## What This Is
