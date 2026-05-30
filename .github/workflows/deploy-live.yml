@@ -22,6 +22,6 @@ jobs:
           debug: true
           script: |
             set -euo pipefail
-            cd /home/gbp4dt5/zones/13h.be/api.dw
+            cd ${{ secrets.VPS_PATH }}
             chmod +x scripts/deploy_live.sh
             ./scripts/deploy_live.sh main
