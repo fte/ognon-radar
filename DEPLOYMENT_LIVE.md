@@ -52,7 +52,7 @@ mkdir -p data
 No manual file is required: `scripts/deploy_live.sh` writes and updates
 `/etc/systemd/system/ognon-radar-api.service` automatically.
 
-Important: `User=` is set from the SSH deployment user at runtime (the same account as GitHub secret `VPS_USER`).
+Important: `User=` is set from the SSH deployment user at runtime (the same account as GitHub secret `VPS_SSH_USER`).
 
 The script also runs:
 - `systemctl daemon-reload`
@@ -102,7 +102,7 @@ certbot --nginx -d <API_FQDN>
 ## 7) GitHub Actions secrets (repo settings)
 
 - `VPS_HOST` = `<VPS_HOST>`
-- `VPS_USER` = SSH user used for deploy (also used as `User=` in systemd unit)
+- `VPS_SSH_USER` = SSH user used for deploy (also used as `User=` in systemd unit)
 - `VPS_SSH_KEY` = private key content used by GitHub Actions
 - `VPS_SSH_PORT` = `<VPS_SSH_PORT>` (usually 22)
 

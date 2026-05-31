@@ -122,7 +122,7 @@ jobs:
 
             if [[ -f scripts/deploy_live.sh ]]; then
               chmod +x scripts/deploy_live.sh
-              ./scripts/deploy_live.sh "$BRANCH"
+              APP_DIR="$APP_DIR" ./scripts/deploy_live.sh "$BRANCH"
             else
               echo "[deploy] scripts/deploy_live.sh not found after git sync; running inline fallback"
               python3 -m venv .venv
@@ -130,6 +130,19 @@ jobs:
               .venv/bin/pip install -r requirements.txt
               sudo -n systemctl daemon-reload
               sudo -n systemctl restart ognon-radar-api.service
-              curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null
+              ready=0
+              for _ in {1..30}; do
+                if curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null; then
+                  ready=1
+                  break
+                fi
+                sleep 1
+              done
+              if [[ "$ready" -ne 1 ]]; then
+                echo "ERROR: API did not become ready on 127.0.0.1:8000 within timeout"
+                sudo -n systemctl --no-pager --full status ognon-radar-api.service | sed -n '1,60p' || true
+                sudo -n journalctl -u ognon-radar-api.service -n 120 --no-pager || true
+                exit 1
+              fi
               echo "[deploy] Inline fallback completed"
             fi
