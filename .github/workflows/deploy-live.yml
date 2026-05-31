@@ -79,7 +79,7 @@ jobs:
             echo "SSH preflight failed with code $rc"
             echo "Most likely causes:"
             echo "1) Public key not present in ~/.ssh/authorized_keys for the target user"
-            echo "2) Wrong target user secret (VPS_USER/VPS_SSH_USER)"
+            echo "2) Wrong target user secret (VPS_SSH_USER)"
             echo "3) Private key in secret does not match the installed public key"
             exit "$rc"
           fi
