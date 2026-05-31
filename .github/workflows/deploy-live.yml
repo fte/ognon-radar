@@ -100,6 +100,36 @@ jobs:
           debug: true
           script: |
             set -euo pipefail
-            cd ${{ secrets.VPS_PATH }}
-            chmod +x scripts/deploy_live.sh
-            ./scripts/deploy_live.sh main
+            APP_DIR="${{ secrets.VPS_PATH }}"
+            BRANCH="${{ github.ref_name }}"
+
+            if [[ ! -d "$APP_DIR" ]]; then
+              echo "APP_DIR does not exist: $APP_DIR"
+              exit 1
+            fi
+
+            cd "$APP_DIR"
+
+            if [[ ! -d .git ]]; then
+              echo "Not a git repository: $APP_DIR"
+              exit 1
+            fi
+
+            echo "[deploy] Syncing git branch: $BRANCH"
+            git fetch --prune origin
+            git checkout "$BRANCH"
+            git pull --ff-only origin "$BRANCH"
+
+            if [[ -f scripts/deploy_live.sh ]]; then
+              chmod +x scripts/deploy_live.sh
+              ./scripts/deploy_live.sh "$BRANCH"
+            else
+              echo "[deploy] scripts/deploy_live.sh not found after git sync; running inline fallback"
+              python3 -m venv .venv
+              .venv/bin/pip install --upgrade pip
+              .venv/bin/pip install -r requirements.txt
+              sudo -n systemctl daemon-reload
+              sudo -n systemctl restart ognon-radar-api.service
+              curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null
+              echo "[deploy] Inline fallback completed"
+            fi
