@@ -22,9 +22,10 @@ cd "$APP_DIR"
 echo "[deploy] Fetching latest refs"
 git fetch --prune origin
 
-echo "[deploy] Checking out $BRANCH"
+echo "[deploy] Resetting working tree to origin/$BRANCH"
 git checkout "$BRANCH"
-git pull --ff-only origin "$BRANCH"
+git reset --hard "origin/$BRANCH"
+git clean -fd
 
 echo "[deploy] Checking passwordless sudo availability"
 if ! sudo -n true 2>/dev/null; then

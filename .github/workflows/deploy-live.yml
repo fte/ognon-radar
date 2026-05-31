@@ -118,7 +118,8 @@ jobs:
             echo "[deploy] Syncing git branch: $BRANCH"
             git fetch --prune origin
             git checkout "$BRANCH"
-            git pull --ff-only origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            git clean -fd
 
             if [[ -f scripts/deploy_live.sh ]]; then
               chmod +x scripts/deploy_live.sh
