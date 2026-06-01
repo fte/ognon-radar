@@ -78,7 +78,7 @@ EOF
 run_sudo systemctl daemon-reload
 run_sudo systemctl enable "$SYSTEMD_SERVICE" >/dev/null
 run_sudo systemctl restart "$SYSTEMD_SERVICE"
-run_sudo systemctl --no-pager --full status "$SYSTEMD_SERVICE" | sed -n '1,18p'
+run_sudo systemctl status "$SYSTEMD_SERVICE" | sed -n '1,18p'
 
 echo "[deploy] Waiting for API readiness"
 ready=0
@@ -92,7 +92,7 @@ done
 
 if [[ "$ready" -ne 1 ]]; then
   echo "ERROR: API did not become ready on 127.0.0.1:8000 within timeout"
-  sudo -n systemctl --no-pager --full status "$SYSTEMD_SERVICE" | sed -n '1,60p' || true
+  sudo -n systemctl status "$SYSTEMD_SERVICE" | sed -n '1,60p' || true
   sudo -n journalctl -u "$SYSTEMD_SERVICE" -n 120 --no-pager || true
   exit 1
 fi
