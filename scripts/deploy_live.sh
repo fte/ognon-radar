@@ -11,6 +11,11 @@ VENV_DIR="$APP_DIR/.venv"
 SYSTEMD_SERVICE="ognon-radar-api.service"
 DEPLOY_USER="${DEPLOY_USER:-$(id -un)}"
 SYSTEMD_UNIT_PATH="/etc/systemd/system/$SYSTEMD_SERVICE"
+CONFIG_PATH="$APP_DIR/config.yaml"
+
+if [[ -f "$APP_DIR/config.live.yaml" ]]; then
+  CONFIG_PATH="$APP_DIR/config.live.yaml"
+fi
 
 run_sudo() {
   if ! sudo -n "$@"; then
@@ -71,7 +76,7 @@ Requires=tor.service
 Type=simple
 User=$DEPLOY_USER
 WorkingDirectory=$APP_DIR
-Environment=APP_CONFIG_PATH=$APP_DIR/config.yaml
+Environment=APP_CONFIG_PATH=$CONFIG_PATH
 ExecStart=$VENV_DIR/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 --log-level info
 Restart=always
 RestartSec=5
@@ -98,7 +103,9 @@ done
 if [[ "$ready" -ne 1 ]]; then
   echo "ERROR: API did not become ready on 127.0.0.1:8000 within timeout"
   sudo -n systemctl status "$SYSTEMD_SERVICE" | sed -n '1,60p' || true
-  sudo -n journalctl -u "$SYSTEMD_SERVICE" -n 120 --no-pager || true
+  if ! sudo -n journalctl -u "$SYSTEMD_SERVICE" -n 120 --no-pager; then
+    echo "[deploy] journalctl requires extra sudo permission; skipping logs"
+  fi
   exit 1
 fi
 
