@@ -14,6 +14,11 @@ SYSTEMD_UNIT_PATH="/etc/systemd/system/$SYSTEMD_SERVICE"
 
 run_sudo() {
   if ! sudo -n "$@"; then
+    rc=$?
+    # systemctl status returns non-zero when unit is not active; this is not a sudo auth issue.
+    if [[ "$1" == "systemctl" && "${2:-}" == "status" ]]; then
+      return "$rc"
+    fi
     echo "ERROR: sudo failed for command: $*"
     echo "Grant NOPASSWD at least for:"
     echo "- /usr/bin/tee /etc/systemd/system/$SYSTEMD_SERVICE"
@@ -67,7 +72,7 @@ Type=simple
 User=$DEPLOY_USER
 WorkingDirectory=$APP_DIR
 Environment=APP_CONFIG_PATH=$APP_DIR/config.yaml
-ExecStart=$VENV_DIR/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --log-level info
+ExecStart=$VENV_DIR/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000 --log-level info
 Restart=always
 RestartSec=5
 
@@ -78,7 +83,7 @@ EOF
 run_sudo systemctl daemon-reload
 run_sudo systemctl enable "$SYSTEMD_SERVICE" >/dev/null
 run_sudo systemctl restart "$SYSTEMD_SERVICE"
-run_sudo systemctl status "$SYSTEMD_SERVICE" | sed -n '1,18p'
+sudo -n systemctl status "$SYSTEMD_SERVICE" | sed -n '1,18p' || true
 
 echo "[deploy] Waiting for API readiness"
 ready=0
