@@ -119,7 +119,7 @@ class TestSearch:
     def test_submit_raw_json_without_content_type_returns_202(self, client):
         resp = client.post(
             "/api/v1/search",
-            data='{"term":"test","max_results":5}',
+            content='{"term":"test","max_results":5}',
         )
         assert resp.status_code == 202
         data = resp.json()

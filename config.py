@@ -69,6 +69,14 @@ class Settings:
         self.job_max_workers: int = jobs_config.get('max_workers', 2)
         self.job_db_path: str = jobs_config.get('db_path', '/app/data/jobs.db')
 
+        # Webhook
+        webhook_config = config.get('webhook', {})
+        self.webhook_max_attempts: int = webhook_config.get('max_attempts', 3)
+        self.webhook_retry_delay: int = webhook_config.get('retry_delay', 5)
+        self.webhook_timeout: float = webhook_config.get('timeout', 10)
+        self.webhook_db_path: str = webhook_config.get('db_path', '/app/data/webhooks.db')
+        self.webhook_allow_insecure_urls: bool = webhook_config.get('allow_insecure_urls', False)
+
 
 # Global settings instance
 settings = Settings(os.getenv('APP_CONFIG_PATH', 'config.yaml'))

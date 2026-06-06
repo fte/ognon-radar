@@ -189,17 +189,17 @@ def _parse_torch_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
     return _parse_generic_serp(soup)
 
 
-def _parse_tordex_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    """Extract results from TorDex search engine.
-
-    TorDex uses <div class="result-content"> with <a class="title"> and
-    <div class="description">.
-    """
+def _parse_css_serp(
+    soup: BeautifulSoup,
+    item_selector: str,
+    anchor_selector: str,
+    snippet_selector: str,
+) -> List[Dict[str, str]]:
+    """Generic SERP parser for engines with CSS-selectable result blocks."""
     entries = []
     seen_netlocs: Set[str] = set()
-
-    for item in soup.select('.result-content, .result, .search-result'):
-        a = item.select_one('a.title, h4 a, h3 a, a[href]')
+    for item in soup.select(item_selector):
+        a = item.select_one(anchor_selector)
         if not a:
             continue
         url = _unwrap_redirect_href(a.get('href', '').strip())
@@ -209,72 +209,40 @@ def _parse_tordex_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
         if netloc in seen_netlocs:
             continue
         seen_netlocs.add(netloc)
-        title = a.get_text(strip=True) or "No Title"
-        desc_el = item.select_one('.description, p, .snippet')
-        snippet = desc_el.get_text(strip=True) if desc_el else ""
-        entries.append({'url': url, 'title': title, 'snippet': snippet})
+        desc_el = item.select_one(snippet_selector)
+        entries.append({
+            'url': url,
+            'title': a.get_text(strip=True) or "No Title",
+            'snippet': desc_el.get_text(strip=True) if desc_el else "",
+        })
+    return entries or _parse_generic_serp(soup)
 
-    if entries:
-        return entries
-    return _parse_generic_serp(soup)
+
+def _parse_tordex_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
+    return _parse_css_serp(
+        soup,
+        item_selector='.result-content, .result, .search-result',
+        anchor_selector='a.title, h4 a, h3 a, a[href]',
+        snippet_selector='.description, p, .snippet',
+    )
 
 
 def _parse_haystak_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    """Extract results from Haystak search engine.
-
-    Haystak renders results as <div class="result"> blocks with
-    a title link and description paragraph.
-    """
-    entries = []
-    seen_netlocs: Set[str] = set()
-
-    for item in soup.select('.result, .search-result, article'):
-        a = item.select_one('a[href]')
-        if not a:
-            continue
-        url = _unwrap_redirect_href(a.get('href', '').strip())
-        if not is_valid_onion_url(url):
-            continue
-        netloc = urlparse(url).netloc.lower()
-        if netloc in seen_netlocs:
-            continue
-        seen_netlocs.add(netloc)
-        title = a.get_text(strip=True) or "No Title"
-        desc_el = item.select_one('p, .description, .snippet')
-        snippet = desc_el.get_text(strip=True) if desc_el else ""
-        entries.append({'url': url, 'title': title, 'snippet': snippet})
-
-    if entries:
-        return entries
-    return _parse_generic_serp(soup)
+    return _parse_css_serp(
+        soup,
+        item_selector='.result, .search-result, article',
+        anchor_selector='a[href]',
+        snippet_selector='p, .description, .snippet',
+    )
 
 
 def _parse_notevil_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    """Extract results from Not Evil search engine.
-
-    Not Evil uses a simple list of results with direct .onion links.
-    """
-    entries = []
-    seen_netlocs: Set[str] = set()
-
-    for item in soup.select('.result, li, div.search-result'):
-        a = item.select_one('a[href]')
-        if not a:
-            continue
-        url = _unwrap_redirect_href(a.get('href', '').strip())
-        if not is_valid_onion_url(url):
-            continue
-        netloc = urlparse(url).netloc.lower()
-        if netloc in seen_netlocs:
-            continue
-        seen_netlocs.add(netloc)
-        title = a.get_text(strip=True) or "No Title"
-        # Try to find a sibling or child snippet
-        desc_el = item.select_one('p, .description, .snippet, span')
-        snippet = desc_el.get_text(strip=True) if desc_el else ""
-        entries.append({'url': url, 'title': title, 'snippet': snippet})
-
-    return entries
+    return _parse_css_serp(
+        soup,
+        item_selector='.result, li, div.search-result',
+        anchor_selector='a[href]',
+        snippet_selector='p, .description, .snippet, span',
+    )
 
 
 def _parse_ddg_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:

@@ -9,9 +9,7 @@ Upgrade path:
 """
 import json
 import logging
-import os
 import sqlite3
-import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -20,8 +18,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
+from core.db_mixin import SqliteMixin
 from core.tor_client import tor_client
-from core.crawler import OnionCrawler, effective_start_url, resolve_search_url
+from core.crawler import OnionCrawler, resolve_search_url
+from core.webhook_manager import webhook_manager
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class JobManager:
+class JobManager(SqliteMixin):
     """
     Manages search jobs with SQLite persistence and a thread pool.
 
@@ -47,28 +47,12 @@ class JobManager:
         self.db_path = db_path
         self.max_workers = max_workers
         self._executor: Optional[ThreadPoolExecutor] = None
-        self._local = threading.local()
-        self._connections: list[sqlite3.Connection] = []
-        self._conn_lock = threading.Lock()
+        self.__init_sqlite__()
         self._init_db()
-
-    # ── SQLite helpers ──────────────────────────────────────────────
-
-    def _get_conn(self) -> sqlite3.Connection:
-        """Get a thread-local SQLite connection."""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(self.db_path, timeout=10)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            with self._conn_lock:
-                self._connections.append(conn)
-            conn.execute("PRAGMA busy_timeout=5000")
-            self._local.conn = conn
-        return self._local.conn
 
     def _init_db(self) -> None:
         """Create jobs table if it doesn't exist."""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._ensure_db_dir()
 
         conn = self._get_conn()
         conn.execute("""
@@ -126,15 +110,7 @@ class JobManager:
             logger.info("Shutting down job workers (waiting for running jobs)...")
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
-        # Close all thread-local connections
-        with self._conn_lock:
-            for conn in self._connections:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            self._connections.clear()
-        self._local = threading.local()
+        self._close_all_connections()
 
     # ── Public API ──────────────────────────────────────────────────
 
@@ -308,6 +284,15 @@ class JobManager:
             conn.commit()
             logger.info(f"Job {job_id} completed: {len(results)} results in {duration}s")
 
+            job_dict = self.get_job(job_id)
+            webhook_manager.send_webhook(
+                job_id=job_id,
+                client_id=job["client_id"],
+                status=JobStatus.COMPLETED,
+                job_data=job_dict or {},
+                result=result_payload,
+            )
+
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}", exc_info=True)
             completed_at = datetime.now(timezone.utc).isoformat()
@@ -316,6 +301,15 @@ class JobManager:
                 (JobStatus.FAILED, str(e), completed_at, job_id),
             )
             conn.commit()
+
+            job_dict = self.get_job(job_id)
+            webhook_manager.send_webhook(
+                job_id=job_id,
+                client_id=job["client_id"],
+                status=JobStatus.FAILED,
+                job_data=job_dict or {},
+                error=str(e),
+            )
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:

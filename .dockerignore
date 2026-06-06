@@ -1,0 +1,42 @@
+# VCS
+.git
+.gitignore
+.github
+.claude
+.remember
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Local runtime
+crawler_output/
+output/
+data/
+.venv/
+
+# Tests and docs
+tests/
+*.md
+AGENTS.md
+DEPLOYMENT_LIVE.md
+CRAWLER_USAGE.md
+ONION_URLS.md
+todo.md
+
+# Config files (dev only)
+config.live.yaml
+config.yaml
+
+# IDE/OS
+.DS_Store
+Makefile
+
+# Large files
+*.log
