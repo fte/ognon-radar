@@ -49,7 +49,12 @@ cors:
 jobs:
   max_workers: 1
   db_path: "{db_path}"
-""".format(db_path=str(tmp_path / "test_jobs.db"))
+webhook:
+  db_path: "{webhook_db_path}"
+""".format(
+        db_path=str(tmp_path / "test_jobs.db"),
+        webhook_db_path=str(tmp_path / "test_webhooks.db"),
+    )
 
     config_file = tmp_path / "config.yaml"
     config_file.write_text(config_content)

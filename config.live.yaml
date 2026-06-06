@@ -41,3 +41,10 @@ cors:
 jobs:
   max_workers: 2
   db_path: "data/jobs.db"
+
+webhook:
+  max_attempts: 3
+  retry_delay: 5
+  timeout: 10
+  db_path: "data/webhooks.db"
+  allow_insecure_urls: false
