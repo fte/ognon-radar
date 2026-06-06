@@ -1,7 +1,7 @@
 """
 Pydantic schemas for request/response validation.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -138,3 +138,90 @@ class JobListResponse(BaseModel):
     total: int = Field(..., description="Total jobs matching filter")
     limit: int = Field(20)
     offset: int = Field(0)
+
+
+# ── Webhook models ──────────────────────────────────────────────────
+
+class WebhookPayload(BaseModel):
+    """Payload sent to webhook URL when a job completes or fails."""
+
+    event: str = Field(..., description="Event type: 'job.completed' or 'job.failed'")
+    job_id: str = Field(..., description="Unique job identifier")
+    status: Literal["completed", "failed", "cancelled"] = Field(..., description="Job status")
+    client_id: str = Field(..., description="Client identifier")
+    created_at: str = Field(..., description="Job creation timestamp")
+    completed_at: Optional[str] = Field(None, description="Job completion timestamp")
+    result: Optional[Dict[str, Any]] = Field(None, description="Search results (for completed jobs)")
+    error: Optional[str] = Field(None, description="Error message (for failed jobs)")
+    request: Dict[str, Any] = Field(..., description="Original search request parameters")
+    timestamp: str = Field(..., description="Webhook send timestamp")
+
+
+class WebhookConfig(BaseModel):
+    """Webhook configuration for a client."""
+
+    url: str = Field(..., description="Webhook URL to call (must be HTTPS in production)")
+    events: List[str] = Field(
+        default=["job.completed", "job.failed"],
+        description="Events to subscribe to"
+    )
+    secret: Optional[str] = Field(
+        None,
+        description="Optional secret for HMAC signature verification"
+    )
+    active: bool = Field(default=True, description="Whether webhook is active")
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        import ipaddress
+        import socket
+        from urllib.parse import urlparse
+        parsed = urlparse(v)
+        if not all([parsed.scheme, parsed.netloc]):
+            raise ValueError("Invalid webhook URL")
+        from config import settings
+        if not settings.webhook_allow_insecure_urls and parsed.scheme != "https":
+            raise ValueError("Webhook URL must be HTTPS in production")
+        # Block SSRF: reject URLs that resolve to private/internal addresses
+        host = parsed.hostname
+        if not host:
+            raise ValueError("Invalid webhook URL: missing host")
+        host = host.rstrip(".").lower()
+        try:
+            for info in socket.getaddrinfo(host, None):
+                ip = ipaddress.ip_address(info[4][0])
+                if (ip.is_private or ip.is_loopback or ip.is_link_local
+                        or ip.is_reserved or ip.is_multicast):
+                    raise ValueError("Webhook host resolves to a disallowed address")
+        except (socket.gaierror, ValueError) as exc:
+            raise ValueError(f"Webhook URL validation failed: {exc}") from exc
+        return v
+
+
+class WebhookConfigResponse(BaseModel):
+    """Response for webhook configuration endpoints."""
+
+    client_id: str = Field(..., description="Client identifier")
+    url: str = Field(..., description="Webhook URL")
+    events: List[str] = Field(..., description="Subscribed events")
+    has_secret: bool = Field(..., description="Whether an HMAC secret is configured")
+    active: bool = Field(..., description="Whether webhook is active")
+    created_at: str = Field(..., description="Configuration creation timestamp")
+
+
+class WebhookDelivery(BaseModel):
+    """Webhook delivery attempt record."""
+
+    id: str = Field(..., description="Delivery attempt ID")
+    job_id: str = Field(..., description="Job ID that triggered the webhook")
+    client_id: str = Field(..., description="Client identifier")
+    url: str = Field(..., description="Webhook URL")
+    event: str = Field(..., description="Event type")
+    status: Literal["success", "failed", "retrying"] = Field(..., description="Delivery status")
+    attempt: int = Field(..., description="Attempt number")
+    response_status: Optional[int] = Field(None, description="HTTP response status code")
+    response_text: Optional[str] = Field(None, description="HTTP response text")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    sent_at: str = Field(..., description="Timestamp when webhook was sent")

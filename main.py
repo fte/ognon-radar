@@ -11,8 +11,10 @@ from fastapi.responses import JSONResponse
 from config import settings
 from routes import health, search
 from routes import jobs
+from routes import webhooks
 from core.tor_client import tor_client
 from core.job_manager import job_manager
+from core.webhook_manager import webhook_manager
 
 # Configure logging
 logging.basicConfig(
@@ -41,12 +43,16 @@ async def lifespan(app: FastAPI):
     # Start job manager (thread pool + recover interrupted jobs)
     job_manager.startup()
     logger.info("Job manager initialized")
-    
+
+    webhook_manager.startup()
+    logger.info("Webhook manager initialized")
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down DarkWeb Search API...")
     job_manager.shutdown()
+    webhook_manager.shutdown()
     tor_client.close()
     logger.info("Cleanup complete")
 
@@ -74,6 +80,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(search.router)
 app.include_router(jobs.router)
+app.include_router(webhooks.router)
 
 
 @app.get("/", tags=["root"])

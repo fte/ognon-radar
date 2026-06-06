@@ -52,3 +52,11 @@ cors:
 jobs:
   max_workers: 2         # Concurrent crawl threads
   db_path: "/app/data/jobs.db"  # SQLite job store
+
+# Webhook Settings
+webhook:
+  max_attempts: 3
+  retry_delay: 5         # Seconds before first retry (doubles each attempt)
+  timeout: 10            # HTTP request timeout in seconds
+  db_path: "/app/data/webhooks.db"
+  allow_insecure_urls: false  # Set true in dev to allow http:// webhook URLs

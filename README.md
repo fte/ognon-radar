@@ -147,26 +147,6 @@ docker-compose --profile testing up
 - **Swagger UI**: http://localhost:8337/docs
 - **ReDoc**: http://localhost:8337/redoc
 
-## 🔒 Security & Ethics
-
-⚠️ **IMPORTANT**: This tool is for **authorized security research only**.
-
-### Legal Requirements
-
-- ✅ Obtain proper authorization before crawling
-- ✅ Follow local, national, and international laws
-- ✅ Respect robots.txt and rate limiting
-- ✅ Document all activities
-- ❌ Never access illegal content
-
-### Best Practices
-
-- Always route through Tor for anonymity
-- Use appropriate crawl delays (7+ seconds)
-- Implement proper rate limiting
-- Log all activities for compliance
-- Report vulnerabilities responsibly
-
 ## 🏗️ Project Structure
 
 ```

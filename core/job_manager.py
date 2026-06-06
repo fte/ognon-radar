@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import settings
 from core.tor_client import tor_client
 from core.crawler import OnionCrawler, effective_start_url, resolve_search_url
+from core.webhook_manager import webhook_manager
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +309,15 @@ class JobManager:
             conn.commit()
             logger.info(f"Job {job_id} completed: {len(results)} results in {duration}s")
 
+            job_dict = self.get_job(job_id)
+            webhook_manager.send_webhook(
+                job_id=job_id,
+                client_id=job["client_id"],
+                status=JobStatus.COMPLETED,
+                job_data=job_dict or {},
+                result=result_payload,
+            )
+
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}", exc_info=True)
             completed_at = datetime.now(timezone.utc).isoformat()
@@ -316,6 +326,15 @@ class JobManager:
                 (JobStatus.FAILED, str(e), completed_at, job_id),
             )
             conn.commit()
+
+            job_dict = self.get_job(job_id)
+            webhook_manager.send_webhook(
+                job_id=job_id,
+                client_id=job["client_id"],
+                status=JobStatus.FAILED,
+                job_data=job_dict or {},
+                error=str(e),
+            )
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
