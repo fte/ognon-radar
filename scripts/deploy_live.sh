@@ -5,7 +5,7 @@ set -euo pipefail
 #   scripts/deploy_live.sh [branch]
 # Default branch is main.
 
-APP_DIR="${APP_DIR:-/home/gbp4dt5/zones/13h.be/api.dw}"
+APP_DIR="${APP_DIR:?APP_DIR is required}"
 BRANCH="${1:-main}"
 VENV_DIR="$APP_DIR/.venv"
 SYSTEMD_SERVICE="ognon-radar-api.service"
@@ -63,6 +63,14 @@ fi
 echo "[deploy] Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
+
+echo "[deploy] Verifying application import"
+APP_CONFIG_PATH="$CONFIG_PATH" "$VENV_DIR/bin/python" - <<'PY'
+import main
+print(f"[deploy] Import OK: {main.settings.api_title}")
+print(f"[deploy] Job DB: {main.settings.job_db_path}")
+print(f"[deploy] Webhook DB: {main.settings.webhook_db_path}")
+PY
 
 echo "[deploy] Restarting systemd service: $SYSTEMD_SERVICE"
 echo "[deploy] Writing systemd unit for user: $DEPLOY_USER"
