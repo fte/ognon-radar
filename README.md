@@ -229,6 +229,33 @@ curl http://localhost:8337/api/v1/jobs/<job_id>
 curl http://localhost:8337/api/v1/jobs
 ```
 
+### Webhooks mini scenario
+
+```bash
+# 1) Register the webhook receiver for a client.
+# The URL must be HTTPS unless webhook.allow_insecure_urls is enabled for dev.
+curl -X PUT http://localhost:8337/api/v1/webhooks/config -H "Content-Type: application/json" -H "X-Client-ID: <CLIENT_ID>" -d '{"url":"https://<WEBHOOK_FQDN>/ognon-radar","events":["job.completed","job.failed"],"secret":"<WEBHOOK_SECRET>","active":true}'
+
+# 2) Check the saved configuration.
+curl http://localhost:8337/api/v1/webhooks/config -H "X-Client-ID: <CLIENT_ID>"
+
+# 3) Start a search job for the same client.
+# When the job reaches completed or failed, the API POSTs the webhook payload.
+curl -X POST http://localhost:8337/api/v1/search -H "Content-Type: application/json" -H "X-Client-ID: <CLIENT_ID>" -d '{"term":"cybersec","max_results":5}'
+
+# 4) Inspect webhook deliveries.
+curl "http://localhost:8337/api/v1/webhooks/deliveries?limit=20" -H "X-Client-ID: <CLIENT_ID>"
+
+# 5) Retry failed deliveries manually.
+curl -X POST http://localhost:8337/api/v1/webhooks/deliveries/retry -H "X-Client-ID: <CLIENT_ID>"
+
+# 6) Disable the webhook when you no longer need it.
+curl -X DELETE http://localhost:8337/api/v1/webhooks/config -H "X-Client-ID: <CLIENT_ID>"
+```
+
+Webhook requests include `X-Webhook-Delivery`, `X-Webhook-Attempt`, and,
+when a secret is configured, `X-Webhook-Signature: sha256=<HMAC_SHA256>`.
+
 ### Using Python
 
 ```python
@@ -250,38 +277,3 @@ print(f"Found {results['total']} results")
 for result in results['results']:
     print(f"- {result['title']}: {result['url']}")
 ```
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
-
-## ⚠️ Disclaimer
-
-This tool is provided for **educational purposes and authorized security research only**. The developers assume NO LIABILITY for misuse. Users are SOLELY RESPONSIBLE for:
-
-- Ensuring proper authorization for all activities
-- Complying with all applicable laws
-- Protecting operational security
-- Ethical handling of collected information
-
-By using this tool, you acknowledge full responsibility for your actions.
-
-## 📄 License
-
-MIT License - See LICENSE file for details
-
-## 📧 Contact
-
-For security issues or questions:
-- Create a GitHub issue
-- Email: [your-email]
-
----
-
-**ognon-radar** | For Authorized Security Research Only
