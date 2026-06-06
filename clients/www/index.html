@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ognon Radar - Demo API</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <p>Demo API en production</p>
+      <h1>Ognon Radar</h1>
+      <p>Recherche simple dans des pages .onion indexees par l'API.</p>
+    </header>
+
+    <main>
+      <section aria-labelledby="search-title">
+        <h2 id="search-title">Lancer une recherche</h2>
+
+        <form id="search-form">
+          <label>
+            Texte a chercher
+            <input
+              id="term"
+              name="term"
+              type="search"
+              autocomplete="off"
+              minlength="1"
+              maxlength="100"
+              placeholder="exemple: cybersec"
+              required
+            >
+          </label>
+
+          <fieldset>
+            <legend>Options</legend>
+
+            <label>
+              Resultats max
+              <input id="max-results" name="max_results" type="number" min="1" max="100" value="10">
+            </label>
+
+            <label>
+              Profondeur
+              <input id="max-depth" name="max_depth" type="number" min="1" max="5" value="2">
+            </label>
+
+            <label>
+              Pages max
+              <input id="max-pages" name="max_pages" type="number" min="1" max="200" value="50">
+            </label>
+          </fieldset>
+
+          <button type="submit">Rechercher</button>
+        </form>
+      </section>
+
+      <section aria-labelledby="job-title">
+        <h2 id="job-title">Etat du job</h2>
+        <output id="status" aria-live="polite">Pret.</output>
+
+        <dl id="job-details" hidden>
+          <div>
+            <dt>Job</dt>
+            <dd id="job-id"></dd>
+          </div>
+          <div>
+            <dt>Statut</dt>
+            <dd id="job-status"></dd>
+          </div>
+          <div>
+            <dt>Debut</dt>
+            <dd id="job-started"></dd>
+          </div>
+          <div>
+            <dt>Fin</dt>
+            <dd id="job-completed"></dd>
+          </div>
+        </dl>
+      </section>
+
+      <section aria-labelledby="results-title">
+        <h2 id="results-title">Resultats</h2>
+        <p id="summary">Les resultats apparaitront quand le job sera termine.</p>
+        <ol id="results"></ol>
+      </section>
+    </main>
+  </body>
+</html>
