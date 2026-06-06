@@ -63,3 +63,7 @@ screenshots/
 # Crawler output
 crawler_output/
 output/
+
+data/*.db
+data/*.db-*
+!data/.gitkeep
