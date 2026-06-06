@@ -6,9 +6,7 @@ import hmac
 import hashlib
 import json
 import logging
-import os
 import sqlite3
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -17,37 +15,22 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from config import settings
+from core.db_mixin import SqliteMixin
 
 logger = logging.getLogger(__name__)
 
 
-class WebhookManager:
+class WebhookManager(SqliteMixin):
     """Manages outgoing webhooks for job completion notifications."""
 
     def __init__(self, db_path: str = "/app/data/webhooks.db"):
         self.db_path = db_path
-        self._local = threading.local()
-        self._connections: list[sqlite3.Connection] = []
-        self._conn_lock = threading.Lock()
+        self.__init_sqlite__()
         self._init_db()
-
-    # ── SQLite helpers ──────────────────────────────────────────────
-
-    def _get_conn(self) -> sqlite3.Connection:
-        """Get a thread-local SQLite connection."""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(self.db_path, timeout=10)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            with self._conn_lock:
-                self._connections.append(conn)
-            conn.execute("PRAGMA busy_timeout=5000")
-            self._local.conn = conn
-        return self._local.conn
 
     def _init_db(self) -> None:
         """Create webhook tables if they don't exist."""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._ensure_db_dir()
 
         conn = self._get_conn()
 
@@ -98,15 +81,16 @@ class WebhookManager:
         logger.info("WebhookManager started")
 
     def shutdown(self) -> None:
-        with self._conn_lock:
-            for conn in self._connections:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            self._connections.clear()
-        self._local = threading.local()
+        self._close_all_connections()
         logger.info("WebhookManager shut down")
+
+    # ── Helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _classify_http_error(exc: Exception) -> str:
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"{type(exc).__name__}: HTTP {exc.response.status_code}"
+        return type(exc).__name__
 
     # ── Row helpers ─────────────────────────────────────────────────
 
@@ -243,26 +227,18 @@ class WebhookManager:
         self,
         delivery_id: str,
         status: str,
-        attempt: Optional[int] = None,
+        attempt: int,
         response_status: Optional[int] = None,
         response_text: Optional[str] = None,
         error: Optional[str] = None
     ) -> None:
         conn = self._get_conn()
-        if attempt is not None:
-            conn.execute(
-                """UPDATE webhook_deliveries
-                   SET status = ?, attempt = ?, response_status = ?, response_text = ?, error = ?
-                   WHERE id = ?""",
-                (status, attempt, response_status, response_text, error, delivery_id)
-            )
-        else:
-            conn.execute(
-                """UPDATE webhook_deliveries
-                   SET status = ?, response_status = ?, response_text = ?, error = ?
-                   WHERE id = ?""",
-                (status, response_status, response_text, error, delivery_id)
-            )
+        conn.execute(
+            """UPDATE webhook_deliveries
+               SET status = ?, attempt = ?, response_status = ?, response_text = ?, error = ?
+               WHERE id = ?""",
+            (status, attempt, response_status, response_text, error, delivery_id)
+        )
         conn.commit()
 
     def send_webhook(
@@ -309,7 +285,7 @@ class WebhookManager:
         max_attempts = settings.webhook_max_attempts
         for attempt in range(1, max_attempts + 1):
             try:
-                self._send_webhook_request(
+                response = self._send_webhook_request(
                     url=url,
                     payload=payload_json,
                     secret=secret,
@@ -320,17 +296,14 @@ class WebhookManager:
                     delivery_id=delivery_id,
                     status="success",
                     attempt=attempt,
-                    response_status=200,
+                    response_status=response.status_code,
                 )
                 logger.info(f"Webhook sent successfully for job {job_id} to {url}")
                 return True
 
             except Exception as e:
                 # Use type+status only — str(e) can embed the URL with credentials
-                if isinstance(e, httpx.HTTPStatusError):
-                    error_msg = f"{type(e).__name__}: HTTP {e.response.status_code}"
-                else:
-                    error_msg = type(e).__name__
+                error_msg = self._classify_http_error(e)
                 logger.warning(
                     f"Webhook attempt {attempt}/{max_attempts} failed for job {job_id}: {error_msg}"
                 )
@@ -424,7 +397,7 @@ class WebhookManager:
                 secret = config["secret"] if config else None
                 new_attempt = delivery["attempt"] + 1
 
-                self._send_webhook_request(
+                response = self._send_webhook_request(
                     url=delivery["url"],
                     payload=payload_json,
                     secret=secret,
@@ -435,22 +408,18 @@ class WebhookManager:
                     delivery_id=delivery["id"],
                     status="success",
                     attempt=new_attempt,
-                    response_status=200,
+                    response_status=response.status_code,
                 )
                 retried_count += 1
                 logger.info(f"Retried webhook delivery {delivery['id']} successfully")
 
             except Exception as e:
                 new_attempt = delivery["attempt"] + 1
-                if isinstance(e, httpx.HTTPStatusError):
-                    error_msg = f"{type(e).__name__}: HTTP {e.response.status_code}"
-                else:
-                    error_msg = type(e).__name__
                 self._update_delivery_status(
                     delivery_id=delivery["id"],
                     status="retrying" if new_attempt <= settings.webhook_max_attempts else "failed",
                     attempt=new_attempt,
-                    error=error_msg,
+                    error=self._classify_http_error(e),
                 )
 
         return retried_count
