@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 from stem import Signal
 from stem.control import Controller
 from urllib.parse import urljoin, urlparse
+from core.constants import BLACKLIST_PATHS, ONION_URL_REGEX
+from core.crawler import extract_onion_links, is_valid_onion_url
 import time
 import json
 import csv
@@ -146,10 +148,6 @@ MAX_IMAGE_SIZE_MB = 5            # Maximum image size to download in MB
 DEFAULT_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']
 image_hash_cache = set()
 
-ONION_URL_REGEX = re.compile(r'^https?://[a-z2-7]{56}\.onion', re.IGNORECASE)
-
-BLACKLIST_PATHS = {'/register', '/signup', '/login', '/logout', '/register.php', '/login.php', '/signup.php'}
-
 # Keywords for dangerous content detection with severity levels
 DANGEROUS_KEYWORDS = {
     'high': [
@@ -212,21 +210,6 @@ def create_tor_session():
     })
     return session
 
-
-def is_valid_onion_url(url):
-    """Check if URL looks like a valid v3 onion address"""
-    return bool(ONION_URL_REGEX.match(url))
-
-
-def extract_onion_links(base_url, soup):
-    """Extract and resolve valid .onion links from a page"""
-    links = set()
-    for a in soup.find_all('a', href=True):
-        href = a['href'].strip()
-        full_url = urljoin(base_url, href)
-        if is_valid_onion_url(full_url):
-            links.add(full_url)
-    return links
 
 
 def download_image(session, image_url, output_dir, page_url, image_extensions, max_size_mb=MAX_IMAGE_SIZE_MB):
