@@ -211,9 +211,36 @@ docker-compose run api pytest
 - [ ] Authentication
 - [ ] Result pagination
 
+## 🌐 Live Instances
+
+| Service | URL |
+|---------|-----|
+| API | `http://api.dw.13h.be` |
+| Web client | `http://dw.13h.be` |
+
+The web client at `http://dw.13h.be` is a browser-based UI for walking through the API endpoints, launching search jobs, and reading results in real time.
+
 ## 📝 Example Usage
 
 ### Using curl
+
+Against the live API:
+
+```bash
+# Health check
+curl http://api.dw.13h.be/api/v1/health
+
+# Search
+curl -X POST http://api.dw.13h.be/api/v1/search -H "Content-Type: application/json" -d '{"term":"cybersec","max_results":5}'
+
+# Poll a job
+curl http://api.dw.13h.be/api/v1/jobs/<job_id>
+
+# List jobs
+curl http://api.dw.13h.be/api/v1/jobs
+```
+
+Or against a local instance:
 
 ```bash
 # Health check
