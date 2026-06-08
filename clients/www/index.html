@@ -8,15 +8,29 @@
     <script src="./app.js" defer></script>
   </head>
   <body>
-    <header>
-      <p>Demo API en production</p>
-      <h1>Ognon Radar</h1>
-      <p>Recherche simple dans des pages .onion indexees par l'API.</p>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Demo API en production</p>
+        <h1>Ognon Radar</h1>
+        <p>Un parcours interactif pour visualiser les endpoints, lancer une recherche, suivre le job en direct et lire le resultat final.</p>
+      </div>
+      <output id="health-status" aria-live="polite">Verification API...</output>
     </header>
 
-    <main>
-      <section aria-labelledby="search-title">
-        <h2 id="search-title">Lancer une recherche</h2>
+    <main class="workspace">
+      <section class="endpoint-panel" aria-labelledby="endpoints-title">
+        <div class="section-head">
+          <p class="eyebrow">Scenario</p>
+          <h2 id="endpoints-title">Endpoints</h2>
+        </div>
+        <ol id="endpoint-list" class="endpoint-list" aria-label="Parcours des endpoints"></ol>
+      </section>
+
+      <section class="request-panel" aria-labelledby="request-title">
+        <div class="section-head">
+          <p class="eyebrow">Etape 1</p>
+          <h2 id="request-title">Composer la recherche</h2>
+        </div>
 
         <form id="search-form">
           <label>
@@ -34,7 +48,7 @@
           </label>
 
           <fieldset>
-            <legend>Options</legend>
+            <legend>Parametres du crawl</legend>
 
             <label>
               Resultats max
@@ -52,38 +66,60 @@
             </label>
           </fieldset>
 
-          <button type="submit">Rechercher</button>
+          <button type="submit">
+            <span aria-hidden="true">></span>
+            Lancer le scenario
+          </button>
         </form>
       </section>
 
-      <section aria-labelledby="job-title">
-        <h2 id="job-title">Etat du job</h2>
+      <section class="process-panel" aria-labelledby="process-title">
+        <div class="section-head">
+          <p class="eyebrow">Etape 2</p>
+          <h2 id="process-title">Process en cours</h2>
+        </div>
+
+        <div id="job-meter" class="job-meter" data-state="idle">
+          <span></span>
+        </div>
+
         <output id="status" aria-live="polite">Pret.</output>
 
-        <dl id="job-details" hidden>
+        <dl id="job-details">
           <div>
             <dt>Job</dt>
-            <dd id="job-id"></dd>
+            <dd id="job-id">-</dd>
           </div>
           <div>
             <dt>Statut</dt>
-            <dd id="job-status"></dd>
+            <dd id="job-status">-</dd>
           </div>
           <div>
             <dt>Debut</dt>
-            <dd id="job-started"></dd>
+            <dd id="job-started">-</dd>
           </div>
           <div>
             <dt>Fin</dt>
-            <dd id="job-completed"></dd>
+            <dd id="job-completed">-</dd>
           </div>
         </dl>
       </section>
 
-      <section aria-labelledby="results-title">
-        <h2 id="results-title">Resultats</h2>
+      <section class="poll-panel" aria-labelledby="poll-title">
+        <div class="section-head">
+          <p class="eyebrow">Polling 1s</p>
+          <h2 id="poll-title">Journal</h2>
+        </div>
+        <ol id="poll-log" class="poll-log" aria-live="polite"></ol>
+      </section>
+
+      <section class="result-panel" aria-labelledby="results-title">
+        <div class="section-head">
+          <p class="eyebrow">Etape 3</p>
+          <h2 id="results-title">Resultat termine</h2>
+        </div>
         <p id="summary">Les resultats apparaitront quand le job sera termine.</p>
-        <ol id="results"></ol>
+        <ol id="results" class="results-list"></ol>
       </section>
     </main>
   </body>
