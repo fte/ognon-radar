@@ -40,7 +40,7 @@ async def list_jobs(
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse, status_code=200)
-def get_job(
+async def get_job(
     job_id: str,
     offset: int = Query(0, ge=0, description="Result offset for pagination"),
     limit: int = Query(20, ge=1, le=200, description="Max results to return"),

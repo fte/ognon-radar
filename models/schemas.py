@@ -175,28 +175,15 @@ class WebhookConfig(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, v: str) -> str:
-        import ipaddress
-        import socket
         from urllib.parse import urlparse
+        from config import settings
         parsed = urlparse(v)
         if not all([parsed.scheme, parsed.netloc]):
             raise ValueError("Invalid webhook URL")
-        from config import settings
         if not settings.webhook_allow_insecure_urls and parsed.scheme != "https":
             raise ValueError("Webhook URL must be HTTPS in production")
-        # Block SSRF: reject URLs that resolve to private/internal addresses
-        host = parsed.hostname
-        if not host:
+        if not parsed.hostname:
             raise ValueError("Invalid webhook URL: missing host")
-        host = host.rstrip(".").lower()
-        try:
-            for info in socket.getaddrinfo(host, None):
-                ip = ipaddress.ip_address(info[4][0])
-                if (ip.is_private or ip.is_loopback or ip.is_link_local
-                        or ip.is_reserved or ip.is_multicast):
-                    raise ValueError("Webhook host resolves to a disallowed address")
-        except (socket.gaierror, ValueError) as exc:
-            raise ValueError(f"Webhook URL validation failed: {exc}") from exc
         return v
 
 

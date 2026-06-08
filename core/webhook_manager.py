@@ -78,6 +78,12 @@ class WebhookManager(SqliteMixin):
     # ── Lifecycle ───────────────────────────────────────────────────
 
     def startup(self) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE webhook_deliveries SET status = 'failed', error = 'Server restarted during delivery' "
+            "WHERE status IN ('pending', 'retrying')"
+        )
+        conn.commit()
         logger.info("WebhookManager started")
 
     def shutdown(self) -> None:
@@ -127,7 +133,7 @@ class WebhookManager(SqliteMixin):
         self,
         client_id: str,
         url: str,
-        events: List[str] = None,
+        events: Optional[List[str]] = None,
         secret: Optional[str] = None,
         active: bool = True,
     ) -> Dict[str, Any]:
