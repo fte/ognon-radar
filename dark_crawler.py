@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import requests
 from bs4 import BeautifulSoup
 from stem import Signal
 from stem.control import Controller
 from urllib.parse import urljoin, urlparse
 from core.constants import BLACKLIST_PATHS, ONION_URL_REGEX
 from core.crawler import extract_onion_links, is_valid_onion_url
+from core.tor_client import TorClient
 import time
 import json
 import csv
@@ -15,7 +15,6 @@ import sys
 import os
 import argparse
 import hashlib
-from requests.exceptions import RequestException, ConnectionError
 from datetime import datetime
 import nltk
 from nltk.corpus import stopwords
@@ -189,26 +188,7 @@ def renew_tor_identity(password):
         logging.error(f"Failed to renew Tor identity: {e}")
 
 
-def create_tor_session():
-    """Create a requests session routed through Tor SOCKS5 proxy with headers"""
-    session = requests.Session()
-    session.proxies = {
-        'http': TOR_SOCKS_PROXY,
-        'https': TOR_SOCKS_PROXY
-    }
-    # Realistic headers to mimic a real browser
-    session.headers.update({
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/115.0 Safari/537.36'),
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Connection': 'keep-alive',
-        'Accept-Encoding': 'gzip, deflate',
-        'DNT': '1',  # Do Not Track
-        'Upgrade-Insecure-Requests': '1'
-    })
-    return session
+_tor = TorClient(proxy_url=TOR_SOCKS_PROXY)
 
 
 
@@ -335,22 +315,6 @@ def extract_and_download_images(session, url, soup, output_dir, image_extensions
     return images_info
 
 
-def get_with_retries(url, session, retries=RETRY_COUNT, backoff=BACKOFF_FACTOR):
-    """HTTP GET with retry and exponential backoff"""
-    last_exc = None
-    for attempt in range(1, retries + 1):
-        try:
-            response = session.get(url, timeout=30)
-            response.raise_for_status()
-            return response
-        except (RequestException, ConnectionError) as e:
-            logging.warning(f"Attempt {attempt} for {url} failed: {e}")
-            last_exc = e
-            sleep_time = backoff * (2 ** (attempt - 1))
-            logging.info(f"Sleeping {sleep_time}s before retrying...")
-            time.sleep(sleep_time)
-    logging.error(f"All {retries} attempts failed for {url}. Skipping this URL.")
-    raise last_exc
 
 
 def analyze_content(text, url):
@@ -415,7 +379,7 @@ def scrape_onion_url(url, session, download_images=False, images_output_dir=None
             return None, None, None, []
 
         logging.info(f"Fetching URL: {url}")
-        response = get_with_retries(url, session)
+        response = _tor.get_with_retries(url)
         soup = BeautifulSoup(response.text, 'lxml')
         title = soup.title.string.strip() if soup.title and soup.title.string else 'No Title Found'
         
@@ -643,19 +607,6 @@ def generate_summary_report(all_results, all_threats, all_images_info, output_di
         return None
 
 
-def test_tor_connection(session):
-    """Test if Tor connection is working"""
-    try:
-        response = session.get("http://check.torproject.org/", timeout=30)
-        if "Congratulations" in response.text:
-            logging.info(f"{Colors.NEON_GREEN}✓ Tor connection successful! Anonymity enabled.{Colors.RESET}")
-            return True
-        else:
-            logging.warning("Tor connection test failed - proceeding anyway")
-            return False
-    except Exception as e:
-        logging.warning(f"Tor test failed: {e}. Make sure Tor is running on port 9050")
-        return False
 
 
 def read_urls_from_file(file_path):
@@ -756,14 +707,14 @@ def main():
     
     logging.info("Basic anonymity maintained through SOCKS proxy")
 
-    session = create_tor_session()
+    session = _tor.create_session()
     all_results = []
     all_threats = []
     all_images_info = []
 
     # Test Tor connection unless disabled
     if not args.no_tor_check:
-        test_tor_connection(session)
+        _tor.test_connection()
     else:
         logging.info("Skipping Tor connection test as requested")
 
