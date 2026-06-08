@@ -1,6 +1,11 @@
 """
 Webhook configuration and delivery history endpoints.
 """
+import asyncio
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from typing import Optional
 
@@ -8,6 +13,19 @@ from core.webhook_manager import webhook_manager
 from models.schemas import WebhookConfig, WebhookConfigResponse, WebhookDelivery
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
+
+
+def _check_ssrf(url: str) -> None:
+    """Raise HTTPException if the URL resolves to a private/internal address."""
+    host = urlparse(url).hostname.rstrip(".").lower()
+    try:
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast):
+                raise HTTPException(status_code=422, detail="Webhook host resolves to a disallowed address")
+    except socket.gaierror as exc:
+        raise HTTPException(status_code=422, detail=f"Webhook URL validation failed: {exc}") from exc
 
 
 def _require_client_id(x_client_id: Optional[str] = Header(None)) -> str:
@@ -36,6 +54,7 @@ async def set_webhook_config(
     client_id: str = Depends(_require_client_id),
 ):
     """Register or update webhook configuration for a client."""
+    await asyncio.to_thread(_check_ssrf, body.url)
     saved = webhook_manager.set_webhook_config(
         client_id=client_id,
         url=body.url,
@@ -87,5 +106,5 @@ async def list_deliveries(
 @router.post("/deliveries/retry", status_code=200)
 async def retry_failed_deliveries(client_id: str = Depends(_require_client_id)):
     """Manually trigger a retry of all failed webhook deliveries for this client."""
-    retried = webhook_manager.retry_failed_deliveries(client_id=client_id)
+    retried = await asyncio.to_thread(webhook_manager.retry_failed_deliveries, client_id)
     return {"retried": retried}

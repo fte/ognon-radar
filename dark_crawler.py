@@ -259,7 +259,7 @@ def download_image(session, image_url, output_dir, page_url, image_extensions, m
         image_data = b''.join(chunks)
         
         # Calculate hash for deduplication
-        image_hash = hashlib.md5(image_data).hexdigest()
+        image_hash = hashlib.sha256(image_data).hexdigest()
         global image_hash_cache
         if image_hash in image_hash_cache:
             logging.debug(f"Duplicate image skipped (hash: {image_hash[:8]})")

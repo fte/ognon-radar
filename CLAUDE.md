@@ -133,5 +133,4 @@ python -c "import yaml; yaml.safe_load(open('config.yaml'))"
 - **Docker-only**: No local Python environment is used for running the service. All execution happens inside containers.
 - **No localhost between services**: Use Docker service names (`tor`, `api`) for inter-container communication.
 - **Async route handlers**: Route functions use `async def`, but `OnionCrawler.crawl_and_search()` is synchronous (it calls `time.sleep()`). This blocks the event loop during crawls — a known limitation noted in the roadmap (Celery background tasks).
-- **No tests yet**: `docker-compose run api pytest` is a placeholder. The README marks tests as TODO.
 - **Config changes**: Edit `config.yaml`, then `docker-compose restart api` (no rebuild needed since it's volume-mounted).

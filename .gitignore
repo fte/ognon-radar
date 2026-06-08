@@ -64,6 +64,7 @@ screenshots/
 crawler_output/
 output/
 
+# Runtime data (SQLite DBs, WAL files)
 data/*.db
-data/*.db-*
-!data/.gitkeep
+data/*.db-shm
+data/*.db-wal

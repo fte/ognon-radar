@@ -39,4 +39,6 @@ class SqliteMixin:
         self._local = threading.local()
 
     def _ensure_db_dir(self) -> None:
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        dir_ = os.path.dirname(self.db_path)
+        if dir_:
+            os.makedirs(dir_, exist_ok=True)
