@@ -6,11 +6,12 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 
+from core.auth import require_api_key, require_client_id
 from core.webhook_manager import webhook_manager
-from models.schemas import WebhookConfig, WebhookConfigResponse, WebhookDelivery
+from models.schemas import WebhookConfig, WebhookConfigResponse
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks"])
 
@@ -26,12 +27,6 @@ def _check_ssrf(url: str) -> None:
                 raise HTTPException(status_code=422, detail="Webhook host resolves to a disallowed address")
     except socket.gaierror as exc:
         raise HTTPException(status_code=422, detail=f"Webhook URL validation failed: {exc}") from exc
-
-
-def _require_client_id(x_client_id: Optional[str] = Header(None)) -> str:
-    if not x_client_id:
-        raise HTTPException(status_code=400, detail="X-Client-ID header is required")
-    return x_client_id
 
 
 def _to_response(d: dict) -> WebhookConfigResponse:
@@ -51,7 +46,8 @@ def _to_response(d: dict) -> WebhookConfigResponse:
 @router.put("/config", response_model=WebhookConfigResponse, status_code=200)
 async def set_webhook_config(
     body: WebhookConfig,
-    client_id: str = Depends(_require_client_id),
+    client_id: str = Depends(require_client_id),
+    _: None = Depends(require_api_key),
 ):
     """Register or update webhook configuration for a client."""
     await asyncio.to_thread(_check_ssrf, body.url)
@@ -66,7 +62,7 @@ async def set_webhook_config(
 
 
 @router.get("/config", response_model=WebhookConfigResponse)
-async def get_webhook_config(client_id: str = Depends(_require_client_id)):
+async def get_webhook_config(client_id: str = Depends(require_client_id)):
     """Get webhook configuration for a client."""
     config = webhook_manager.get_webhook_config(client_id)
     if not config:
@@ -75,7 +71,10 @@ async def get_webhook_config(client_id: str = Depends(_require_client_id)):
 
 
 @router.delete("/config", status_code=204)
-async def delete_webhook_config(client_id: str = Depends(_require_client_id)):
+async def delete_webhook_config(
+    client_id: str = Depends(require_client_id),
+    _: None = Depends(require_api_key),
+):
     """Delete webhook configuration for a client."""
     if not webhook_manager.delete_webhook_config(client_id):
         raise HTTPException(status_code=404, detail="No webhook configured for this client")
@@ -86,7 +85,7 @@ async def delete_webhook_config(client_id: str = Depends(_require_client_id)):
 
 @router.get("/deliveries")
 async def list_deliveries(
-    client_id: str = Depends(_require_client_id),
+    client_id: str = Depends(require_client_id),
     job_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
@@ -104,7 +103,10 @@ async def list_deliveries(
 
 
 @router.post("/deliveries/retry", status_code=200)
-async def retry_failed_deliveries(client_id: str = Depends(_require_client_id)):
+async def retry_failed_deliveries(
+    client_id: str = Depends(require_client_id),
+    _: None = Depends(require_api_key),
+):
     """Manually trigger a retry of all failed webhook deliveries for this client."""
     retried = await asyncio.to_thread(webhook_manager.retry_failed_deliveries, client_id)
     return {"retried": retried}

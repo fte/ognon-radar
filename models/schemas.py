@@ -1,7 +1,7 @@
 """
 Pydantic schemas for request/response validation.
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -110,6 +110,7 @@ class JobCreatedResponse(BaseModel):
     """Response returned when a search job is submitted (202 Accepted)."""
 
     job_id: str = Field(..., description="Unique job identifier")
+    client_id: str = Field(..., description="Client identifier to include in X-Client-ID on subsequent requests")
     status: str = Field("queued", description="Initial job status")
     created_at: str = Field(..., description="ISO 8601 creation timestamp")
     poll_url: str = Field(..., description="URL to poll for job status")
@@ -170,7 +171,6 @@ class WebhookConfig(BaseModel):
         description="Optional secret for HMAC signature verification"
     )
     active: bool = Field(default=True, description="Whether webhook is active")
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @field_validator("url")
     @classmethod

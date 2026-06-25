@@ -12,15 +12,10 @@ from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
 from config import settings
-from core.constants import ONION_URL_REGEX
+from core.constants import BLACKLIST_PATHS, ONION_URL_REGEX
 from core.tor_client import TorClient
 
 logger = logging.getLogger(__name__)
-
-BLACKLIST_PATHS = {
-    '/register', '/signup', '/login', '/logout',
-    '/register.php', '/login.php', '/signup.php'
-}
 
 
 def is_valid_onion_url(url: str) -> bool:

@@ -173,19 +173,6 @@ class WebhookManager(SqliteMixin):
         conn.commit()
         return cursor.rowcount > 0
 
-    def list_webhook_configs(
-        self,
-        limit: int = 100,
-        offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
-        conn = self._get_conn()
-        total = conn.execute("SELECT COUNT(*) FROM webhook_configs").fetchone()[0]
-        rows = conn.execute(
-            "SELECT * FROM webhook_configs ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset)
-        ).fetchall()
-        return [self._config_row_to_dict(row) for row in rows], total
-
     # ── Delivery Management ─────────────────────────────────────────
 
     def _generate_signature(self, payload: str, secret: str) -> str:
@@ -289,38 +276,40 @@ class WebhookManager(SqliteMixin):
         )
 
         max_attempts = settings.webhook_max_attempts
-        for attempt in range(1, max_attempts + 1):
-            try:
-                response = self._send_webhook_request(
-                    url=url,
-                    payload=payload_json,
-                    secret=secret,
-                    delivery_id=delivery_id,
-                    attempt=attempt,
-                )
-                self._update_delivery_status(
-                    delivery_id=delivery_id,
-                    status="success",
-                    attempt=attempt,
-                    response_status=response.status_code,
-                )
-                logger.info(f"Webhook sent successfully for job {job_id} to {url}")
-                return True
+        timeout = httpx.Timeout(settings.webhook_timeout, connect=10.0)
+        with httpx.Client(timeout=timeout) as http_client:
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    response = self._send_webhook_request(
+                        url=url,
+                        payload=payload_json,
+                        client=http_client,
+                        secret=secret,
+                        delivery_id=delivery_id,
+                        attempt=attempt,
+                    )
+                    self._update_delivery_status(
+                        delivery_id=delivery_id,
+                        status="success",
+                        attempt=attempt,
+                        response_status=response.status_code,
+                    )
+                    logger.info(f"Webhook sent successfully for job {job_id} to {url}")
+                    return True
 
-            except Exception as e:
-                # Use type+status only — str(e) can embed the URL with credentials
-                error_msg = self._classify_http_error(e)
-                logger.warning(
-                    f"Webhook attempt {attempt}/{max_attempts} failed for job {job_id}: {error_msg}"
-                )
-                self._update_delivery_status(
-                    delivery_id=delivery_id,
-                    status="retrying" if attempt < max_attempts else "failed",
-                    attempt=attempt,
-                    error=error_msg,
-                )
-                if attempt < max_attempts:
-                    time.sleep(settings.webhook_retry_delay * (2 ** (attempt - 1)))
+                except Exception as e:
+                    error_msg = self._classify_http_error(e)
+                    logger.warning(
+                        f"Webhook attempt {attempt}/{max_attempts} failed for job {job_id}: {error_msg}"
+                    )
+                    self._update_delivery_status(
+                        delivery_id=delivery_id,
+                        status="retrying" if attempt < max_attempts else "failed",
+                        attempt=attempt,
+                        error=error_msg,
+                    )
+                    if attempt < max_attempts:
+                        time.sleep(settings.webhook_retry_delay * (2 ** (attempt - 1)))
 
         logger.error(f"Webhook failed after {max_attempts} attempts for job {job_id}")
         return False
@@ -329,9 +318,10 @@ class WebhookManager(SqliteMixin):
         self,
         url: str,
         payload: str,
+        client: httpx.Client,
         secret: Optional[str] = None,
         delivery_id: Optional[str] = None,
-        attempt: int = 1
+        attempt: int = 1,
     ) -> httpx.Response:
         headers = {
             "Content-Type": "application/json",
@@ -345,11 +335,9 @@ class WebhookManager(SqliteMixin):
             signature = self._generate_signature(payload, secret)
             headers["X-Webhook-Signature"] = f"sha256={signature}"
 
-        timeout = httpx.Timeout(settings.webhook_timeout, connect=10.0)
-        with httpx.Client(timeout=timeout) as client:
-            response = client.post(url, content=payload, headers=headers)
-            response.raise_for_status()
-            return response
+        response = client.post(url, content=payload, headers=headers)
+        response.raise_for_status()
+        return response
 
     def get_delivery_attempts(
         self,
@@ -381,6 +369,8 @@ class WebhookManager(SqliteMixin):
         return [self._delivery_row_to_dict(row) for row in rows], total
 
     def retry_failed_deliveries(self, client_id: str) -> int:
+        from core.job_manager import job_manager  # late import — avoids circular dep
+
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT * FROM webhook_deliveries WHERE client_id = ? AND status IN ('failed', 'retrying')",
@@ -388,45 +378,55 @@ class WebhookManager(SqliteMixin):
         ).fetchall()
 
         retried_count = 0
-        for row in rows:
-            delivery = self._delivery_row_to_dict(row)
-            try:
+        timeout = httpx.Timeout(settings.webhook_timeout, connect=10.0)
+        with httpx.Client(timeout=timeout) as http_client:
+            for row in rows:
+                delivery = self._delivery_row_to_dict(row)
+                config = self.get_webhook_config(delivery["client_id"])
+                secret = config["secret"] if config else None
+                new_attempt = delivery["attempt"] + 1
+
+                # Reconstruct full payload from original job data
+                job_dict = job_manager.get_job(delivery["job_id"]) or {}
                 payload_data = {
                     "event": delivery["event"],
                     "job_id": delivery["job_id"],
                     "status": delivery["event"].split(".")[-1],
                     "client_id": delivery["client_id"],
+                    "created_at": job_dict.get("created_at", ""),
+                    "completed_at": job_dict.get("completed_at"),
+                    "request": job_dict.get("request", {}),
+                    "result": job_dict.get("result"),
+                    "error": job_dict.get("error"),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
-                payload_json = json.dumps(payload_data)
+                payload_json = json.dumps(payload_data, default=str)
 
-                config = self.get_webhook_config(delivery["client_id"])
-                secret = config["secret"] if config else None
-                new_attempt = delivery["attempt"] + 1
+                try:
+                    response = self._send_webhook_request(
+                        url=delivery["url"],
+                        payload=payload_json,
+                        client=http_client,
+                        secret=secret,
+                        delivery_id=delivery["id"],
+                        attempt=new_attempt,
+                    )
+                    self._update_delivery_status(
+                        delivery_id=delivery["id"],
+                        status="success",
+                        attempt=new_attempt,
+                        response_status=response.status_code,
+                    )
+                    retried_count += 1
+                    logger.info(f"Retried webhook delivery {delivery['id']} successfully")
 
-                response = self._send_webhook_request(
-                    url=delivery["url"],
-                    payload=payload_json,
-                    secret=secret,
-                    delivery_id=delivery["id"],
-                    attempt=new_attempt,
-                )
-                self._update_delivery_status(
-                    delivery_id=delivery["id"],
-                    status="success",
-                    attempt=new_attempt,
-                    response_status=response.status_code,
-                )
-                retried_count += 1
-                logger.info(f"Retried webhook delivery {delivery['id']} successfully")
-
-            except Exception as e:
-                new_attempt = delivery["attempt"] + 1
-                self._update_delivery_status(
-                    delivery_id=delivery["id"],
-                    status="retrying" if new_attempt <= settings.webhook_max_attempts else "failed",
-                    attempt=new_attempt,
-                    error=self._classify_http_error(e),
-                )
+                except Exception as e:
+                    self._update_delivery_status(
+                        delivery_id=delivery["id"],
+                        status="retrying" if new_attempt <= settings.webhook_max_attempts else "failed",
+                        attempt=new_attempt,
+                        error=self._classify_http_error(e),
+                    )
 
         return retried_count
 

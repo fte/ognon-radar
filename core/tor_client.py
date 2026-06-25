@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 class TorClient:
     """Manages Tor SOCKS5 proxy connections and session handling."""
     
-    def __init__(self):
+    def __init__(self, proxy_url: Optional[str] = None):
         """Initialize Tor client with proxy configuration."""
-        self.proxy_url = settings.tor_proxy
+        self.proxy_url = proxy_url or settings.tor_proxy
         self.session: Optional[requests.Session] = None
         
     def create_session(self) -> requests.Session:

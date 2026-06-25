@@ -220,6 +220,30 @@ docker-compose run api pytest
 
 The web client at `http://dw.13h.be` is a browser-based UI for walking through the API endpoints, launching search jobs, and reading results in real time.
 
+### Lancer le client web en local
+
+```bash
+# Servir les fichiers statiques sur le port 8338
+python3 -m http.server 8338 --directory clients/www
+```
+
+Ouvrir `http://localhost:8338` dans le navigateur. Le client pointe sur `http://api.dw.13h.be` par défaut.
+
+Pour pointer sur une instance locale (Docker) au lieu de la prod, modifier la première ligne de `clients/www/app.js` :
+
+```js
+const API_BASE_URL = "http://localhost:8337";
+```
+
+> Ouvrir `index.html` directement en `file://` fonctionne aussi, mais les requêtes CORS vers l'API locale peuvent être bloquées selon le navigateur. Passer par `python3 -m http.server` évite ce problème.
+
+**Vos acces — panneau en haut du client :**
+
+- **Client ID** : generé automatiquement au premier lancement et conservé en `localStorage`. Copiez-le pour retrouver vos jobs depuis un autre appareil ou navigateur.
+- **Cle API (plan payant)** : cliquez "Generer une cle API" pour obtenir une cle persistante liée à votre Client ID. Cette cle remplace le Client ID pour toutes les requêtes — utile pour acceder à vos jobs sans dépendre du localStorage. Notez-la : elle n'est pas réaffichée après fermeture.
+- **Restaurer une session** : collez une cle API existante dans le champ "Coller une cle existante" et cliquez "Appliquer".
+- **Reinitialiser** : supprime le Client ID du localStorage et repart avec un nouvel identifiant.
+
 ## 📝 Example Usage
 
 ### Using curl

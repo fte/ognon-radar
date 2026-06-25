@@ -30,8 +30,8 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       # Mount for development (comment out for production)
       - .:/app
-      # Job database persistence
-      - job-data:/app/data
+      # Job database persistence (bind mount — accessible from host for DBeaver etc.)
+      - ./ognon-jobs:/app/data
     depends_on:
       tor:
         condition: service_healthy
@@ -76,5 +76,4 @@ networks:
   darkweb-net:
     driver: bridge
 
-volumes:
-  job-data:
+volumes: {}

@@ -14,10 +14,46 @@
         <h1>Ognon Radar</h1>
         <p>Un parcours interactif pour visualiser les endpoints, lancer une recherche, suivre le job en direct et lire le resultat final.</p>
       </div>
-      <output id="health-status" aria-live="polite">Verification API...</output>
+      <div class="header-status">
+        <output id="health-status" aria-live="polite">Verification API...</output>
+        <output id="client-id" aria-live="polite" title="Identifiant client conserve en localStorage">-</output>
+        <output id="api-key-status" aria-live="polite">Pas de cle API</output>
+      </div>
     </header>
 
     <main class="workspace">
+      <section class="credentials-panel" aria-labelledby="credentials-title">
+        <div class="section-head">
+          <p class="eyebrow">Session</p>
+          <h2 id="credentials-title">Vos acces</h2>
+        </div>
+        <div class="credentials-grid">
+          <div class="cred-block">
+            <p class="cred-label">Client ID</p>
+            <div class="cred-row">
+              <output id="client-id-full" class="cred-value">-</output>
+              <button type="button" id="copy-client-id">Copier</button>
+            </div>
+            <p class="cred-hint">Sauvegardez cet identifiant pour retrouver vos jobs depuis un autre navigateur ou appareil.</p>
+            <button type="button" id="reset-client-id" class="btn-ghost">Reinitialiser</button>
+          </div>
+          <div class="cred-block">
+            <p class="cred-label">Cle API <span class="badge">Plan payant</span></p>
+            <div id="cred-key-inactive">
+              <div class="cred-row">
+                <input id="api-key-input" type="text" placeholder="Coller une cle existante..." autocomplete="off" spellcheck="false">
+                <button type="button" id="apply-api-key">Appliquer</button>
+              </div>
+              <button type="button" id="generate-api-key">Generer une cle API</button>
+            </div>
+            <div id="cred-key-active" hidden>
+              <output id="api-key-display" class="cred-value cred-value--key">-</output>
+              <button type="button" id="clear-api-key" class="btn-ghost">Supprimer la cle</button>
+            </div>
+            <p class="cred-hint">La cle API vous permet de vous authentifier sans passer par le Client ID. Notez-la — elle ne sera plus affichee apres fermeture.</p>
+          </div>
+        </div>
+      </section>
       <section class="endpoint-panel" aria-labelledby="endpoints-title">
         <div class="section-head">
           <p class="eyebrow">Scenario</p>
