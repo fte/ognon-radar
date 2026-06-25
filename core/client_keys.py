@@ -6,12 +6,13 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
+from config import settings
 from core.db_mixin import SqliteMixin
 
 
 class ClientKeyStore(SqliteMixin):
-    def __init__(self, db_path: str = "/app/data/jobs.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = ""):
+        self.db_path = db_path or settings.job_db_path
         self.__init_sqlite__()
 
     def startup(self) -> None:
