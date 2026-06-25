@@ -126,6 +126,10 @@ The script automatically detects Docker environment:
 - In Docker: Uses `tor:9050` (service name)
 - Locally: Uses `127.0.0.1:9050`
 
+> **Note:** `dark_crawler.py` imports from `core/` which requires a `config.yaml` file in the
+> working directory at import time. When running outside Docker, copy `config.yaml` to your
+> working directory and set `tor.proxy` to `socks5h://127.0.0.1:9050` before running.
+
 Override with environment variable:
 ```bash
 docker-compose --profile crawler run --rm \

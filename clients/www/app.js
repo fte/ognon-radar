@@ -1,6 +1,12 @@
 const API_BASE_URL = "http://api.dw.13h.be";
-const CLIENT_ID = "clients-www-demo";
+const CLIENT_ID_KEY = "ognon-client-id";
+const API_KEY_KEY = "ognon-api-key";
 const POLL_DELAY_MS = 1000;
+
+let clientId = localStorage.getItem(CLIENT_ID_KEY) || generateClientId();
+localStorage.setItem(CLIENT_ID_KEY, clientId);
+
+let storedApiKey = localStorage.getItem(API_KEY_KEY) || null;
 
 const endpoints = [
   {
@@ -75,6 +81,13 @@ const healthStatus = document.querySelector("#health-status");
 const endpointList = document.querySelector("#endpoint-list");
 const statusOutput = document.querySelector("#status");
 const jobMeter = document.querySelector("#job-meter");
+const clientIdEl = document.querySelector("#client-id");
+const clientIdFull = document.querySelector("#client-id-full");
+const apiKeyStatus = document.querySelector("#api-key-status");
+const apiKeyDisplay = document.querySelector("#api-key-display");
+const apiKeyInput = document.querySelector("#api-key-input");
+const credKeyActive = document.querySelector("#cred-key-active");
+const credKeyInactive = document.querySelector("#cred-key-inactive");
 const jobId = document.querySelector("#job-id");
 const jobStatus = document.querySelector("#job-status");
 const jobStarted = document.querySelector("#job-started");
@@ -88,6 +101,39 @@ let pollCount = 0;
 
 renderEndpoints();
 checkHealth();
+renderClientId();
+renderCredentials();
+
+document.querySelector("#copy-client-id").addEventListener("click", () => {
+  navigator.clipboard.writeText(clientId).catch(() => {});
+});
+
+document.querySelector("#reset-client-id").addEventListener("click", () => {
+  localStorage.removeItem(CLIENT_ID_KEY);
+  location.reload();
+});
+
+document.querySelector("#apply-api-key").addEventListener("click", () => {
+  const value = apiKeyInput.value.trim();
+  if (!value) return;
+  storedApiKey = value;
+  localStorage.setItem(API_KEY_KEY, storedApiKey);
+  apiKeyInput.value = "";
+  renderCredentials();
+});
+
+document.querySelector("#generate-api-key").addEventListener("click", generateClientKey);
+
+document.querySelector("#clear-api-key").addEventListener("click", () => {
+  storedApiKey = null;
+  localStorage.removeItem(API_KEY_KEY);
+  renderCredentials();
+});
+
+healthStatus.addEventListener("click", () => {
+  const href = healthStatus.dataset.href;
+  if (href) window.open(href, "_blank", "noreferrer");
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -108,10 +154,7 @@ form.addEventListener("submit", async (event) => {
   try {
     const response = await fetch(`${API_BASE_URL}/api/v1/search`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Client-ID": CLIENT_ID,
-      },
+      headers: { "Content-Type": "application/json", ...getClientHeaders() },
       body: JSON.stringify(payload),
     });
 
@@ -142,8 +185,9 @@ async function checkHealth() {
       throw new Error(formatApiError(health, response.status));
     }
 
-    healthStatus.value = "API disponible";
+    healthStatus.value = "API disponible — docs";
     healthStatus.dataset.state = "completed";
+    healthStatus.dataset.href = `${API_BASE_URL}/docs`;
     setEndpointState("health", "done");
   } catch (error) {
     healthStatus.value = error.message;
@@ -156,7 +200,9 @@ async function pollJob(id) {
   pollCount += 1;
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}?limit=100`);
+    const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}?limit=100`, {
+      headers: getClientHeaders(),
+    });
     const job = await readJson(response);
 
     if (!response.ok) {
@@ -254,6 +300,70 @@ function setStatus(message, state) {
 
 function setMeterState(state) {
   jobMeter.dataset.state = state || "idle";
+}
+
+function generateClientId() {
+  const adj = ["swift", "brave", "dark", "silent", "ghost", "sharp", "cold", "wild", "iron", "storm",
+               "frost", "amber", "jade", "cobalt", "onyx", "ash", "crimson", "silver", "hollow", "quiet"];
+  const noun = ["falcon", "wolf", "raven", "cipher", "spectre", "node", "proxy", "byte", "signal", "relay",
+                "vault", "echo", "drift", "torch", "nexus", "pulse", "shard", "arc", "lens", "trace"];
+  const buf = crypto.getRandomValues(new Uint32Array(3));
+  const pick = (arr, n) => arr[n % arr.length];
+  const suffix = buf[2].toString(16).padStart(8, "0").slice(0, 8);
+  return `${pick(adj, buf[0])}-${pick(noun, buf[1])}-${suffix}`;
+}
+
+function getClientHeaders() {
+  if (storedApiKey) {
+    return { "X-API-Key": storedApiKey };
+  }
+  return { "X-Client-ID": clientId };
+}
+
+function renderClientId() {
+  clientIdEl.textContent = clientId;
+  clientIdEl.title = "Conserve en localStorage — reinitialiser pour changer";
+}
+
+function renderCredentials() {
+  clientIdFull.textContent = clientId;
+
+  if (storedApiKey) {
+    const masked = `${storedApiKey.slice(0, 10)}...${storedApiKey.slice(-4)}`;
+    apiKeyDisplay.textContent = masked;
+    apiKeyDisplay.title = storedApiKey;
+    credKeyActive.hidden = false;
+    credKeyInactive.hidden = true;
+    apiKeyStatus.value = "Cle API active";
+    apiKeyStatus.dataset.state = "completed";
+  } else {
+    credKeyActive.hidden = true;
+    credKeyInactive.hidden = false;
+    apiKeyStatus.value = "Pas de cle API";
+    apiKeyStatus.dataset.state = "";
+  }
+}
+
+async function generateClientKey() {
+  const btn = document.querySelector("#generate-api-key");
+  btn.disabled = true;
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/client/key`, {
+      method: "POST",
+      headers: getClientHeaders(),
+    });
+    const data = await readJson(response);
+    if (!response.ok) {
+      throw new Error(formatApiError(data, response.status));
+    }
+    storedApiKey = data.api_key;
+    localStorage.setItem(API_KEY_KEY, storedApiKey);
+    renderCredentials();
+  } catch (error) {
+    alert(`Erreur: ${error.message}`);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function resetScenario() {

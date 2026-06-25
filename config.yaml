@@ -42,6 +42,8 @@ retry:
 # Security
 security:
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+  api_key: ""  # Leave empty to disable auth (dev default). Set a value in config.live.yaml.
+  # Admin access = presenting the api_key. No separate role config needed.
 
 # CORS
 cors:

@@ -59,6 +59,7 @@ class Settings:
             'user_agent',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         )
+        self.api_key: str = security_config.get('api_key', '')
         
         # CORS
         cors_config = config.get('cors', {})

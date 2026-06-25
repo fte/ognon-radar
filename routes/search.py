@@ -7,10 +7,11 @@ from datetime import datetime, timezone
 from typing import Optional
 from json import JSONDecodeError
 
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from pydantic import ValidationError
 
 from config import settings
+from core.auth import generate_client_id, require_api_key
 from core.crawler import is_valid_onion_url
 from core.job_manager import job_manager
 from models.schemas import SearchRequest, JobCreatedResponse
@@ -24,6 +25,7 @@ router = APIRouter(prefix="/api/v1", tags=["search"])
 async def search_onion_sites(
     request: Request,
     x_client_id: Optional[str] = Header(None, description="Client identifier for job tracking"),
+    _: None = Depends(require_api_key),
 ) -> JobCreatedResponse:
     """
     Submit a search job for .onion sites containing a specific term.
@@ -71,7 +73,7 @@ async def search_onion_sites(
     request_data = search_request.model_dump()
     request_data["start_url"] = start_url
 
-    client_id = x_client_id or ""
+    client_id = x_client_id or generate_client_id()
     job_id = job_manager.submit_job(request_data, client_id=client_id)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -79,6 +81,7 @@ async def search_onion_sites(
 
     return JobCreatedResponse(
         job_id=job_id,
+        client_id=client_id,
         status="queued",
         created_at=now,
         poll_url=f"/api/v1/jobs/{job_id}",

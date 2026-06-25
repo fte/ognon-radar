@@ -103,6 +103,7 @@ section {
 }
 
 #health-status,
+#client-id,
 #status {
   display: block;
   min-height: 44px;
@@ -113,8 +114,16 @@ section {
   color: var(--muted);
 }
 
-#health-status {
+.header-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   align-self: end;
+}
+
+#client-id {
+  font-family: monospace;
+  font-size: 0.85em;
 }
 
 output[data-state="running"] {
@@ -125,6 +134,14 @@ output[data-state="running"] {
 output[data-state="completed"] {
   color: var(--accent-strong);
   border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+
+output[data-href] {
+  cursor: pointer;
+}
+
+output[data-href]:hover {
+  text-decoration: underline;
 }
 
 output[data-state="failed"],
@@ -418,6 +435,98 @@ article footer {
   font-size: .85rem;
 }
 
+.credentials-panel {
+  grid-column: 1 / -1;
+}
+
+.credentials-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.cred-block {
+  display: grid;
+  gap: 10px;
+}
+
+.cred-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: .9rem;
+  font-weight: 700;
+}
+
+.cred-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.cred-value {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-family: monospace;
+  font-size: .85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cred-value--key {
+  color: var(--accent-strong);
+  cursor: default;
+}
+
+.cred-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: .82rem;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: start;
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.btn-ghost:hover {
+  background: none;
+  color: var(--text);
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e6ece7;
+  color: var(--accent-strong);
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+#api-key-status {
+  font-size: .82em;
+}
+
 @media (max-width: 920px) {
   .app-header,
   .workspace {
@@ -430,9 +539,14 @@ article footer {
   }
 
   .endpoint-panel,
-  .result-panel {
+  .result-panel,
+  .credentials-panel {
     grid-column: auto;
     grid-row: auto;
+  }
+
+  .credentials-grid {
+    grid-template-columns: 1fr;
   }
 }
 

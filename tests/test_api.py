@@ -138,11 +138,20 @@ class TestSearch:
             headers={"X-Client-ID": "my-client"},
         )
         assert resp.status_code == 202
-        job_id = resp.json()["job_id"]
+        data = resp.json()
+        job_id = data["job_id"]
+        assert data["client_id"] == "my-client"
 
-        # Verify client_id stored
-        job_resp = client.get(f"/api/v1/jobs/{job_id}")
+        # Verify client_id stored and accessible with same client
+        job_resp = client.get(f"/api/v1/jobs/{job_id}", headers={"X-Client-ID": "my-client"})
         assert job_resp.json()["client_id"] == "my-client"
+
+    def test_submit_without_client_id_generates_one(self, client):
+        resp = client.post("/api/v1/search", json={"term": "test"})
+        assert resp.status_code == 202
+        data = resp.json()
+        assert "client_id" in data
+        assert data["client_id"] != ""
 
     def test_submit_invalid_url_returns_400(self, client):
         resp = client.post(
@@ -160,29 +169,34 @@ class TestSearch:
 
 
 class TestJobs:
-    def _submit(self, client, term="test", client_id=None):
-        headers = {}
-        if client_id:
-            headers["X-Client-ID"] = client_id
+    _HDR = {"X-Client-ID": "test-client"}
+
+    def _submit(self, client, term="test", client_id="test-client"):
+        headers = {"X-Client-ID": client_id} if client_id else {}
         resp = client.post("/api/v1/search", json={"term": term}, headers=headers)
         return resp.json()["job_id"]
 
     def test_get_job(self, client):
         job_id = self._submit(client)
-        resp = client.get(f"/api/v1/jobs/{job_id}")
+        resp = client.get(f"/api/v1/jobs/{job_id}", headers=self._HDR)
         assert resp.status_code == 200
         data = resp.json()
         assert data["id"] == job_id
         assert data["request"]["term"] == "test"
 
     def test_get_nonexistent_job_404(self, client):
-        resp = client.get("/api/v1/jobs/does_not_exist")
+        resp = client.get("/api/v1/jobs/does_not_exist", headers=self._HDR)
         assert resp.status_code == 404
+
+    def test_get_job_wrong_client_403(self, client):
+        job_id = self._submit(client, client_id="owner")
+        resp = client.get(f"/api/v1/jobs/{job_id}", headers={"X-Client-ID": "stranger"})
+        assert resp.status_code == 403
 
     def test_list_jobs(self, client):
         self._submit(client, "term1")
         self._submit(client, "term2")
-        resp = client.get("/api/v1/jobs")
+        resp = client.get("/api/v1/jobs", headers=self._HDR)
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] >= 2
@@ -201,28 +215,28 @@ class TestJobs:
         job_id = self._submit(client)
 
         # Job might still be queued — try to cancel
-        resp = client.post(f"/api/v1/jobs/{job_id}/cancel")
+        resp = client.post(f"/api/v1/jobs/{job_id}/cancel", headers=self._HDR)
         # Either 200 (cancelled) or 409 (already running)
         assert resp.status_code in (200, 409)
 
     def test_cancel_nonexistent_404(self, client):
-        resp = client.post("/api/v1/jobs/nope/cancel")
+        resp = client.post("/api/v1/jobs/nope/cancel", headers=self._HDR)
         assert resp.status_code == 404
 
     def test_delete_nonexistent_404(self, client):
-        resp = client.delete("/api/v1/jobs/nope")
+        resp = client.delete("/api/v1/jobs/nope", headers=self._HDR)
         assert resp.status_code == 404
 
     def test_list_jobs_pagination(self, client):
         for i in range(5):
             self._submit(client, f"term{i}")
 
-        resp = client.get("/api/v1/jobs?limit=2&offset=0")
+        resp = client.get("/api/v1/jobs?limit=2&offset=0", headers=self._HDR)
         data = resp.json()
         assert data["limit"] == 2
         assert len(data["jobs"]) <= 2
 
     def test_list_jobs_filter_status(self, client):
         self._submit(client)
-        resp = client.get("/api/v1/jobs?status=queued")
+        resp = client.get("/api/v1/jobs?status=queued", headers=self._HDR)
         assert resp.status_code == 200

@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 from stem import Signal
 from stem.control import Controller
 from urllib.parse import urljoin, urlparse
-from core.constants import BLACKLIST_PATHS, ONION_URL_REGEX
+from core.constants import BLACKLIST_PATHS
 from core.crawler import extract_onion_links, is_valid_onion_url
 from core.tor_client import TorClient
 import time
@@ -315,31 +315,24 @@ def extract_and_download_images(session, url, soup, output_dir, image_extensions
     return images_info
 
 
-
-
-def analyze_content(text, url):
+def analyze_content(text, url, term=""):
     """Analyze content for dangerous keywords and return threat assessment"""
     threats = {'high': [], 'medium': [], 'low': []}
     text_lower = text.lower()
-    
+
     for severity, keywords in DANGEROUS_KEYWORDS.items():
         for keyword in keywords:
             if keyword.lower() in text_lower:
                 threats[severity].append(keyword)
-    
+
     # Additional analysis for specific patterns
-    # Email addresses
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    emails = re.findall(email_pattern, text)
-    if emails and any(word in text_lower for word in ['sell', 'buy', 'leak', 'dump', 'database']):
-        threats['medium'].append('Potential email database leak')
-    
-    # Phone numbers
-    phone_pattern = r'(\+\d{1,3}[-\.\s]??|\d{1,4}[-\.\s]??)?(\(\d{1,4}\)[-\.\s]??)?\d{1,4}[-\.\s]??\d{1,4}[-\.\s]??\d{1,9}'
-    phones = re.findall(phone_pattern, text)
-    if phones and any(word in text_lower for word in ['sell', 'buy', 'leak', 'database']):
-        threats['medium'].append('Potential phone number database leak')
-    
+    # Email addresses — only flag if an email contains the search term
+    if term:
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        emails = re.findall(email_pattern, text)
+        if any(term.lower() in email.lower() for email in emails):
+            threats['medium'].append('Email matching search term found')
+
     # Credit card patterns
     cc_pattern = r'\b(?:\d{4}[- ]?){3}\d{4}\b'
     ccs = re.findall(cc_pattern, text)
@@ -605,8 +598,6 @@ def generate_summary_report(all_results, all_threats, all_images_info, output_di
     except Exception as e:
         logging.error(f"Failed to generate summary report: {e}")
         return None
-
-
 
 
 def read_urls_from_file(file_path):

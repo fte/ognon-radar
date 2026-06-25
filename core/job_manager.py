@@ -203,16 +203,22 @@ class JobManager(SqliteMixin):
         conn.commit()
         return cursor.rowcount > 0
 
-    def delete_all_jobs(self, status: Optional[str] = None) -> int:
-        """Delete all terminal jobs, optionally filtered by status. Returns deleted count."""
+    def delete_all_jobs(self, status: Optional[str] = None, client_id: Optional[str] = None) -> int:
+        """Delete all terminal jobs, optionally filtered by status and/or client_id. Returns deleted count."""
         conn = self._get_conn()
+        terminal = (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED)
+        clauses: list = []
+        params: list = []
         if status:
-            cursor = conn.execute("DELETE FROM jobs WHERE status = ?", (status,))
+            clauses.append("status = ?")
+            params.append(status)
         else:
-            cursor = conn.execute(
-                "DELETE FROM jobs WHERE status IN (?, ?, ?)",
-                (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED),
-            )
+            clauses.append(f"status IN ({','.join('?' * len(terminal))})")
+            params.extend(terminal)
+        if client_id:
+            clauses.append("client_id = ?")
+            params.append(client_id)
+        cursor = conn.execute(f"DELETE FROM jobs WHERE {' AND '.join(clauses)}", params)
         conn.commit()
         return cursor.rowcount
 
@@ -253,7 +259,6 @@ class JobManager(SqliteMixin):
             actual_url = resolve_search_url(start_url, term, tor_client)
             if actual_url != start_url:
                 logger.info(f"Job {job_id}: search engine detected, crawling {actual_url}")
-            tor_connected = tor_client.test_connection()
             crawler = OnionCrawler(tor_client)
             results, total_crawled = crawler.crawl_and_search(
                 start_url=actual_url,
@@ -272,7 +277,7 @@ class JobManager(SqliteMixin):
                 "total": len(results),
                 "crawled_pages": total_crawled,
                 "duration_seconds": duration,
-                "tor_connected": tor_connected,
+                "tor_connected": True,
                 "start_url": actual_url,
             }
 

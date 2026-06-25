@@ -12,9 +12,11 @@ from config import settings
 from routes import health, search
 from routes import jobs
 from routes import webhooks
+from routes import client as client_routes
 from core.tor_client import tor_client
 from core.job_manager import job_manager
 from core.webhook_manager import webhook_manager
+from core.client_keys import client_key_store
 
 # Configure logging
 logging.basicConfig(
@@ -46,6 +48,9 @@ async def lifespan(app: FastAPI):
 
     webhook_manager.startup()
     logger.info("Webhook manager initialized")
+
+    client_key_store.startup()
+    logger.info("Client key store initialized")
 
     yield
 
@@ -81,6 +86,7 @@ app.include_router(health.router)
 app.include_router(search.router)
 app.include_router(jobs.router)
 app.include_router(webhooks.router)
+app.include_router(client_routes.router)
 
 
 @app.get("/", tags=["root"])
