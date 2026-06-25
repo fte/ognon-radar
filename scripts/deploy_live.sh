@@ -111,9 +111,6 @@ done
 if [[ "$ready" -ne 1 ]]; then
   echo "ERROR: API did not become ready on 127.0.0.1:8000 within timeout"
   sudo -n systemctl status "$SYSTEMD_SERVICE" | sed -n '1,60p' || true
-  if ! sudo -n journalctl -u "$SYSTEMD_SERVICE" -n 120 --no-pager; then
-    echo "[deploy] journalctl requires extra sudo permission; skipping logs"
-  fi
   exit 1
 fi
 
