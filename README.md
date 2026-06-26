@@ -211,11 +211,76 @@ docker-compose run api pytest
 - [ ] Authentication
 - [ ] Result pagination
 
+## 🧅 Vanity .onion Address
+
+The live API is reachable via a vanity Tor hidden service address generated with [mkp224o](https://github.com/cathugger/mkp224o).
+
+### Generating a vanity address
+
+```bash
+git clone https://github.com/cathugger/mkp224o.git
+cd mkp224o
+./autogen.sh && ./configure && make
+
+# Generate an address starting with "ognon" (CPU-intensive, may take days)
+./mkp224o ognon -d output/ -n 1
+```
+
+Key options for low-resource machines or long runs:
+
+| Option | Effect |
+|--------|--------|
+| `-B` | batch mode -- no interactive output, suitable for background |
+| `-t 4` | number of threads (match your vCPU count) |
+| `-s` | print stats periodically |
+| `-n 1` | stop after finding 1 match |
+| `-d output/` | write results to a directory instead of stdout |
+
+To run in the background with `screen` so it survives SSH disconnects:
+
+```bash
+screen -dmS ognonr ./mkp224o -B -t 4 -s ognon -d output/ -n 1
+
+# Reattach to check progress
+screen -r ognonr
+
+# Detach again
+# Ctrl-A then D
+```
+
+Prefix length directly determines search time -- each additional character multiplies the search space by ~32 (base32 alphabet). A 5-character prefix takes minutes; 7 characters took ~7 days on a single machine.
+
+The tool outputs a directory named after the generated address, containing three files: `hostname`, `hs_ed25519_public_key`, `hs_ed25519_secret_key`.
+
+### Deploying the hidden service (system Tor, Debian/Ubuntu)
+
+```bash
+# Copy keys to Tor's data directory
+sudo cp -r output/<ADDRESS>.onion /var/lib/tor/ognon-api
+sudo chown -R debian-tor:debian-tor /var/lib/tor/ognon-api
+sudo chmod 700 /var/lib/tor/ognon-api
+
+# Add to /etc/tor/torrc
+echo "HiddenServiceDir /var/lib/tor/ognon-api/" | sudo tee -a /etc/tor/torrc
+echo "HiddenServicePort 80 127.0.0.1:<APP_PORT>" | sudo tee -a /etc/tor/torrc
+
+# Tor reads the existing keys instead of generating new ones
+sudo systemctl restart tor@default
+sudo journalctl -u tor@default -n 20
+```
+
+If nginx is your reverse proxy and the .onion address exceeds 64 characters, add this to the `http {}` block in `/etc/nginx/nginx.conf`:
+
+```nginx
+server_names_hash_bucket_size 128;
+```
+
 ## 🌐 Live Instances
 
 | Service | URL |
 |---------|-----|
 | API | `http://api.dw.13h.be` |
+| API (Tor) | `http://ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion` |
 | Web client | `http://dw.13h.be` |
 
 The web client at `http://dw.13h.be` is a browser-based UI for walking through the API endpoints, launching search jobs, and reading results in real time.
