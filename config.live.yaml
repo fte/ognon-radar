@@ -36,9 +36,10 @@ security:
   api_key: ""  # Set to a strong random value before going live. Key holder = admin scope.
 
 cors:
-  # Restrict to known client origins in production if this API is not fully public.
-  origins:
-    - "*"
+  # List explicit origins, e.g. "https://your-frontend.example.com".
+  # Empty list blocks all cross-origin browser requests (safe default).
+  # Set to ["*"] only if this API is intentionally fully public.
+  origins: []
 
 jobs:
   max_workers: 2
