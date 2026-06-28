@@ -141,6 +141,32 @@ class JobListResponse(BaseModel):
     offset: int = Field(0)
 
 
+# ── Capture models ───────────────────────────────────────────────────
+
+
+class CaptureRequest(BaseModel):
+    start_url: str = Field(..., description="Root .onion URL to capture")
+    max_pages: int = Field(20, ge=1, le=200)
+    max_depth: int = Field(2, ge=1, le=5)
+    timeout: int = Field(30, ge=10, le=120)
+
+    @field_validator("start_url")
+    @classmethod
+    def validate_onion_url(cls, v: str) -> str:
+        if not ONION_URL_REGEX.match(v):
+            raise ValueError("Invalid .onion URL format. Must be a valid Tor v3 address.")
+        return v.lower()
+
+
+class CaptureResultPayload(BaseModel):
+    url: str
+    pages_captured: int
+    assets_captured: int
+    size_bytes: int
+    storage_key: str
+    download_url: str
+
+
 # ── Webhook models ──────────────────────────────────────────────────
 
 class WebhookPayload(BaseModel):

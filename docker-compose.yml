@@ -30,7 +30,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       # Mount for development (comment out for production)
       - .:/app
-      # Job database persistence (bind mount — accessible from host for DBeaver etc.)
+      # Job database and captures persistence (bind mount — accessible from host)
       - ./ognon-jobs:/app/data
     depends_on:
       tor:

@@ -222,6 +222,23 @@ class JobManager(SqliteMixin):
         conn.commit()
         return cursor.rowcount
 
+    def submit_capture_job(self, request_data: dict, client_id: str = "") -> str:
+        """Enqueue a new capture job. Returns job_id."""
+        job_id = uuid.uuid4().hex[:16]
+        now = datetime.now(timezone.utc).isoformat()
+        # Tag the request so _execute_job can dispatch correctly
+        request_data = {**request_data, "_job_type": "capture"}
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO jobs (id, client_id, status, request, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (job_id, client_id, JobStatus.QUEUED, json.dumps(request_data), now),
+        )
+        conn.commit()
+        self._submit_to_pool(job_id)
+        logger.info(f"Capture job {job_id} queued for client '{client_id}'")
+        return job_id
+
     # ── Internal ────────────────────────────────────────────────────
 
     def _submit_to_pool(self, job_id: str) -> None:
@@ -254,32 +271,10 @@ class JobManager(SqliteMixin):
         start_time = time.time()
 
         try:
-            term = request_data["term"]
-            start_url = request_data["start_url"]
-            actual_url = resolve_search_url(start_url, term, tor_client)
-            if actual_url != start_url:
-                logger.info(f"Job {job_id}: search engine detected, crawling {actual_url}")
-            crawler = OnionCrawler(tor_client)
-            results, total_crawled = crawler.crawl_and_search(
-                start_url=actual_url,
-                search_term=term,
-                max_depth=request_data.get("max_depth", settings.default_max_depth),
-                max_pages=request_data.get("max_pages", settings.default_max_pages),
-                max_results=request_data.get("max_results", settings.default_max_results),
-                timeout=request_data.get("timeout", settings.default_timeout),
-            )
-
-            duration = round(time.time() - start_time, 2)
-
-            result_payload = {
-                "term": term,
-                "results": results,
-                "total": len(results),
-                "crawled_pages": total_crawled,
-                "duration_seconds": duration,
-                "tor_connected": True,
-                "start_url": actual_url,
-            }
+            if request_data.get("_job_type") == "capture":
+                result_payload = self._run_capture(job_id, request_data)
+            else:
+                result_payload = self._run_search(job_id, request_data, start_time)
 
             completed_at = datetime.now(timezone.utc).isoformat()
             conn.execute(
@@ -287,7 +282,7 @@ class JobManager(SqliteMixin):
                 (JobStatus.COMPLETED, json.dumps(result_payload, default=str), completed_at, job_id),
             )
             conn.commit()
-            logger.info(f"Job {job_id} completed: {len(results)} results in {duration}s")
+            logger.info(f"Job {job_id} completed")
 
             job_dict = self.get_job(job_id)
             webhook_manager.send_webhook(
@@ -315,6 +310,53 @@ class JobManager(SqliteMixin):
                 job_data=job_dict or {},
                 error=str(e),
             )
+
+    def _run_search(self, job_id: str, request_data: dict, start_time: float) -> dict:
+        term = request_data["term"]
+        start_url = request_data["start_url"]
+        actual_url = resolve_search_url(start_url, term, tor_client)
+        if actual_url != start_url:
+            logger.info(f"Job {job_id}: search engine detected, crawling {actual_url}")
+        tor_connected = tor_client.test_connection()
+        crawler = OnionCrawler(tor_client)
+        results, total_crawled = crawler.crawl_and_search(
+            start_url=actual_url,
+            search_term=term,
+            max_depth=request_data.get("max_depth", settings.default_max_depth),
+            max_pages=request_data.get("max_pages", settings.default_max_pages),
+            max_results=request_data.get("max_results", settings.default_max_results),
+            timeout=request_data.get("timeout", settings.default_timeout),
+        )
+        duration = round(time.time() - start_time, 2)
+        return {
+            "term": term,
+            "results": results,
+            "total": len(results),
+            "crawled_pages": total_crawled,
+            "duration_seconds": duration,
+            "tor_connected": tor_connected,
+            "start_url": actual_url,
+        }
+
+    def _run_capture(self, job_id: str, request_data: dict) -> dict:
+        from core.capture import get_capture_provider
+        provider = get_capture_provider()
+        result = provider.capture(
+            job_id=job_id,
+            start_url=request_data["start_url"],
+            max_pages=request_data.get("max_pages", 20),
+            max_depth=request_data.get("max_depth", 2),
+            timeout=request_data.get("timeout", settings.default_timeout),
+        )
+        download_url = f"/api/v1/captures/{job_id}/download"
+        return {
+            "url": result.url,
+            "pages_captured": result.pages_captured,
+            "assets_captured": result.assets_captured,
+            "size_bytes": result.size_bytes,
+            "storage_key": result.storage_key,
+            "download_url": download_url,
+        }
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:

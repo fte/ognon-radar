@@ -10,6 +10,9 @@ PyYAML==6.0.1
 beautifulsoup4==4.12.3
 lxml==5.1.0
 
+# Web archive capture
+warcio==1.7.4
+
 # Testing
 pytest==7.4.3
 httpx[socks]>=0.27,<1.0

@@ -78,6 +78,13 @@ class Settings:
         self.webhook_db_path: str = webhook_config.get('db_path', '/app/data/webhooks.db')
         self.webhook_allow_insecure_urls: bool = webhook_config.get('allow_insecure_urls', False)
 
+        # Capture
+        self.capture: dict = config.get('capture', {
+            'backend': 'warc',
+            'output_dir': '/app/data/captures',
+            'max_size_mb': 500,
+        })
+
 
 # Global settings instance
 settings = Settings(os.getenv('APP_CONFIG_PATH', 'config.yaml'))
