@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
-from core.capture import get_capture_provider
+from config import settings
 from core.job_manager import job_manager
 from models.schemas import CaptureRequest, JobCreatedResponse
 
@@ -52,11 +52,18 @@ async def download_capture(job_id: str) -> FileResponse:
 
     result = job.get("result") or {}
     storage_key = result.get("storage_key")
-    if not storage_key or not Path(storage_key).exists():
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="Archive file not found")
+
+    resolved = Path(storage_key).resolve()
+    output_dir = Path(settings.capture["output_dir"]).resolve()
+    if not resolved.is_relative_to(output_dir):
+        raise HTTPException(status_code=403, detail="Invalid archive path")
+    if not resolved.exists():
         raise HTTPException(status_code=404, detail="Archive file not found")
 
     return FileResponse(
-        path=storage_key,
+        path=str(resolved),
         media_type="application/gzip",
         filename=f"{job_id}.warc.gz",
         headers={"Content-Disposition": f'attachment; filename="{job_id}.warc.gz"'},

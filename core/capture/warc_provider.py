@@ -49,7 +49,9 @@ class WARCCaptureProvider(CaptureProvider):
         max_depth: int,
         timeout: int,
     ) -> CaptureResult:
-        dest = self._output_dir / f"{job_id}.warc.gz"
+        dest = (self._output_dir / f"{job_id}.warc.gz").resolve()
+        if not dest.is_relative_to(self._output_dir.resolve()):
+            raise ValueError(f"Resolved capture path escapes output_dir: {dest}")
         pages = 0
         assets = 0
 
