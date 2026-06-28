@@ -348,7 +348,7 @@ class JobManager(SqliteMixin):
             max_depth=request_data.get("max_depth", 2),
             timeout=request_data.get("timeout", settings.default_timeout),
         )
-        download_url = f"/api/v1/captures/{job_id}/download"
+        download_url = provider.get_download_url(result.storage_key)
         return {
             "url": result.url,
             "pages_captured": result.pages_captured,
