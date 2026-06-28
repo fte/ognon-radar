@@ -126,6 +126,7 @@ class WARCCaptureProvider(CaptureProvider):
     def _capture_assets(
         self, writer: WARCWriter, base_url: str, soup: BeautifulSoup, timeout: int
     ) -> int:
+        allowed_host = urlparse(base_url).netloc
         captured = 0
         seen: Set[str] = set()
         for tag, attr in _ASSET_SELECTORS:
@@ -140,8 +141,7 @@ class WARCCaptureProvider(CaptureProvider):
                 parsed = urlparse(asset_url)
                 if parsed.scheme not in ("http", "https"):
                     continue
-                # Only fetch assets on the same .onion host
-                if not asset_url.endswith(".onion") and ".onion" not in parsed.netloc:
+                if parsed.netloc != allowed_host:
                     continue
                 try:
                     resp = self._tor.get_with_retries(asset_url, timeout=timeout)
