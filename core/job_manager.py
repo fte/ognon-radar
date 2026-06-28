@@ -226,8 +226,13 @@ class JobManager(SqliteMixin):
         """Enqueue a new capture job. Returns job_id."""
         job_id = uuid.uuid4().hex[:16]
         now = datetime.now(timezone.utc).isoformat()
-        # Tag the request so _execute_job can dispatch correctly
-        request_data = {**request_data, "_job_type": "capture"}
+        request_data = {
+            **request_data,
+            "_job_type": "capture",
+            "max_pages": min(request_data.get("max_pages", 20), 200),
+            "max_depth": min(request_data.get("max_depth", 2), 5),
+            "timeout": min(max(request_data.get("timeout", settings.default_timeout), 10), 120),
+        }
         conn = self._get_conn()
         conn.execute(
             """INSERT INTO jobs (id, client_id, status, request, created_at)
