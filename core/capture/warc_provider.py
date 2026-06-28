@@ -52,8 +52,11 @@ class WARCCaptureProvider(CaptureProvider):
         dest = (self._output_dir / f"{job_id}.warc.gz").resolve()
         if not dest.is_relative_to(self._output_dir.resolve()):
             raise ValueError(f"Resolved capture path escapes output_dir: {dest}")
+
+        max_bytes = settings.capture.get("max_size_mb", 500) * 1024 * 1024
         pages = 0
         assets = 0
+        size_capped = False
 
         with open(dest, "wb") as fh:
             writer = WARCWriter(fh, gzip=True)
@@ -80,9 +83,19 @@ class WARCCaptureProvider(CaptureProvider):
                 pages += 1
                 logger.info(f"Capture: page {pages}/{max_pages} — {url}")
 
+                if fh.tell() >= max_bytes:
+                    logger.warning(f"Capture {job_id}: size limit {max_bytes // (1024*1024)} MB reached, stopping")
+                    size_capped = True
+                    break
+
                 if "text/html" in response.headers.get("Content-Type", ""):
                     soup = BeautifulSoup(response.text, "lxml")
-                    assets += self._capture_assets(writer, url, soup, timeout)
+                    assets, size_capped = self._capture_assets(
+                        writer, url, soup, timeout, fh, max_bytes, assets
+                    )
+                    if size_capped:
+                        logger.warning(f"Capture {job_id}: size limit reached during asset fetch, stopping")
+                        break
 
                     if depth < max_depth:
                         for link in self._extract_links(url, soup):
@@ -126,10 +139,17 @@ class WARCCaptureProvider(CaptureProvider):
         writer.write_record(record)
 
     def _capture_assets(
-        self, writer: WARCWriter, base_url: str, soup: BeautifulSoup, timeout: int
-    ) -> int:
+        self,
+        writer: WARCWriter,
+        base_url: str,
+        soup: BeautifulSoup,
+        timeout: int,
+        fh,
+        max_bytes: int,
+        captured: int,
+    ) -> tuple:
+        """Fetch same-host assets. Returns (total_captured, size_capped)."""
         allowed_host = urlparse(base_url).netloc
-        captured = 0
         seen: Set[str] = set()
         for tag, attr in _ASSET_SELECTORS:
             for el in soup.find_all(tag, **{attr: True}):
@@ -151,7 +171,9 @@ class WARCCaptureProvider(CaptureProvider):
                     captured += 1
                 except Exception as exc:
                     logger.debug(f"Capture: asset skip {asset_url}: {exc}")
-        return captured
+                if fh.tell() >= max_bytes:
+                    return captured, True
+        return captured, False
 
     def _extract_links(self, base_url: str, soup: BeautifulSoup) -> Set[str]:
         links: Set[str] = set()
