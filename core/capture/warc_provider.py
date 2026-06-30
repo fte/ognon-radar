@@ -163,7 +163,7 @@ class WARCCaptureProvider(CaptureProvider):
         job_id: str = "",
     ) -> tuple:
         """Fetch same-host assets. Returns (total_captured, size_capped)."""
-        allowed_host = urlparse(base_url).netloc
+        allowed_host = urlparse(base_url).netloc.lower()
         seen: Set[str] = set()
         for tag, attr in _ASSET_SELECTORS:
             for el in soup.find_all(tag, **{attr: True}):
@@ -177,7 +177,10 @@ class WARCCaptureProvider(CaptureProvider):
                 parsed = urlparse(asset_url)
                 if parsed.scheme not in ("http", "https"):
                     continue
-                if parsed.netloc != allowed_host:
+                parsed_host = parsed.netloc.lower()
+                if not parsed_host.endswith(".onion"):
+                    continue
+                if parsed_host != allowed_host:
                     continue
                 asset_start = time.monotonic()
                 bytes_before = fh.tell()
