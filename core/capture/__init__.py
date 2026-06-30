@@ -3,15 +3,14 @@ from core.capture.base import CaptureProvider, CaptureResult
 
 
 def get_capture_provider() -> CaptureProvider:
-    backend = settings.capture.get("backend", "warc")
-    if backend == "warc":
+    if settings.capture_backend == "warc":
         from core.capture.warc_provider import WARCCaptureProvider
         from core.tor_client import tor_client
         return WARCCaptureProvider(
             tor_client=tor_client,
-            output_dir=settings.capture.get("output_dir", "/app/data/captures"),
+            output_dir=settings.capture_output_dir,
         )
-    raise ValueError(f"Unknown capture backend: {backend!r}. Supported: warc")
+    raise ValueError(f"Unknown capture backend: {settings.capture_backend!r}. Supported: warc")
 
 
 __all__ = ["CaptureProvider", "CaptureResult", "get_capture_provider"]

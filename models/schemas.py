@@ -9,6 +9,12 @@ from pydantic import BaseModel, Field, field_validator
 from core.constants import ONION_URL_REGEX
 
 
+def _validate_onion_url(v: str) -> str:
+    if not ONION_URL_REGEX.match(v):
+        raise ValueError("Invalid .onion URL format. Must be a valid Tor v3 address.")
+    return v.lower()
+
+
 class SearchRequest(BaseModel):
     """Request model for search endpoint."""
     
@@ -64,11 +70,7 @@ class SearchRequest(BaseModel):
     @field_validator('start_url')
     @classmethod
     def validate_onion_url(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if not ONION_URL_REGEX.match(v):
-            raise ValueError('Invalid .onion URL format. Must be a valid Tor v3 address.')
-        return v.lower()
+        return None if v is None else _validate_onion_url(v)
 
 
 class SearchResult(BaseModel):
@@ -153,9 +155,7 @@ class CaptureRequest(BaseModel):
     @field_validator("start_url")
     @classmethod
     def validate_onion_url(cls, v: str) -> str:
-        if not ONION_URL_REGEX.match(v):
-            raise ValueError("Invalid .onion URL format. Must be a valid Tor v3 address.")
-        return v.lower()
+        return _validate_onion_url(v)
 
 
 class CaptureResultPayload(BaseModel):

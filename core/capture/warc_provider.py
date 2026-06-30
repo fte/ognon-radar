@@ -4,6 +4,7 @@ WARC capture provider — writes full site archives to local .warc.gz files.
 Each HTTP response (pages + assets) is recorded as a WARC 'response' record.
 Swap this provider for an R2/B2 one without changing the API layer.
 """
+import io
 import logging
 import os
 import time
@@ -89,7 +90,7 @@ class WARCCaptureProvider(CaptureProvider):
                 bytes_written = fh.tell() - bytes_before
                 logger.info(f"[{job_id}] page {pages}/{max_pages} depth={depth} {page_ms}ms +{bytes_written}B — {url}")
 
-                if fh.tell() >= max_bytes:
+                if bytes_before + bytes_written >= max_bytes:
                     logger.warning(f"[{job_id}] size limit {max_bytes // (1024*1024)} MB reached, stopping")
                     size_capped = True
                     break
@@ -145,7 +146,7 @@ class WARCCaptureProvider(CaptureProvider):
         record = writer.create_warc_record(
             url,
             "response",
-            payload=__import__("io").BytesIO(payload),
+            payload=io.BytesIO(payload),
             length=len(payload),
             http_headers=http_headers,
         )
@@ -193,7 +194,7 @@ class WARCCaptureProvider(CaptureProvider):
                     logger.debug(f"[{job_id}] asset {captured} {asset_ms}ms +{bytes_written}B — {asset_url}")
                 except Exception as exc:
                     logger.debug(f"[{job_id}] asset skip {asset_url}: {exc}")
-                if fh.tell() >= max_bytes:
+                if bytes_before + bytes_written >= max_bytes:
                     return captured, True
         return captured, False
 

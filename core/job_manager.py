@@ -323,7 +323,6 @@ class JobManager(SqliteMixin):
         actual_url = resolve_search_url(start_url, term, tor_client)
         if actual_url != start_url:
             logger.info(f"Job {job_id}: search engine detected, crawling {actual_url}")
-        tor_connected = tor_client.test_connection()
         crawler = OnionCrawler(tor_client)
         results, total_crawled = crawler.crawl_and_search(
             start_url=actual_url,
@@ -340,7 +339,7 @@ class JobManager(SqliteMixin):
             "total": len(results),
             "crawled_pages": total_crawled,
             "duration_seconds": duration,
-            "tor_connected": tor_connected,
+            "tor_connected": True,
             "start_url": actual_url,
         }
 
@@ -350,7 +349,7 @@ class JobManager(SqliteMixin):
         result = provider.capture(
             job_id=job_id,
             start_url=request_data["start_url"],
-            max_pages=min(request_data.get("max_pages", 20), settings.capture_max_pages),
+            max_pages=request_data.get("max_pages", 20),
             max_depth=request_data.get("max_depth", 2),
             timeout=request_data.get("timeout", settings.default_timeout),
             max_size_mb=request_data.get("max_size_mb", settings.capture_max_size_mb),

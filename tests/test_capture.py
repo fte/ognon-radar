@@ -21,9 +21,6 @@ import pytest
 from fastapi.testclient import TestClient
 from warcio.archiveiterator import ArchiveIterator
 
-import pytest
-from fastapi.testclient import TestClient
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -524,6 +521,7 @@ class TestCaptureEndpointEnqueueAndDownload:
         settings = Settings(str(tmp_path / "config.yaml"))
         monkeypatch.setattr("config.settings", settings)
         monkeypatch.setattr("routes.capture.settings", settings)
+        monkeypatch.setattr("core.job_manager.settings", settings)
 
         mock_tor = MagicMock()
         mock_tor.test_connection.return_value = True
