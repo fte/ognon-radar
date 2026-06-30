@@ -57,6 +57,7 @@ class WARCCaptureProvider(CaptureProvider):
         pages = 0
         assets = 0
         size_capped = False
+        job_start = time.monotonic()
 
         with open(dest, "wb") as fh:
             writer = WARCWriter(fh, gzip=True)
@@ -72,29 +73,33 @@ class WARCCaptureProvider(CaptureProvider):
                 if any(parsed.path.startswith(p) for p in BLACKLIST_PATHS):
                     continue
 
+                page_start = time.monotonic()
+                bytes_before = fh.tell()
                 try:
                     response = self._tor.get_with_retries(url, timeout=timeout)
                 except Exception as exc:
-                    logger.warning(f"Capture: failed to fetch {url}: {exc}")
+                    logger.warning(f"[{job_id}] fetch failed depth={depth} url={url}: {exc}")
                     continue
 
                 visited.add(url)
                 self._write_record(writer, url, response)
                 pages += 1
-                logger.info(f"Capture: page {pages}/{max_pages} — {url}")
+                page_ms = int((time.monotonic() - page_start) * 1000)
+                bytes_written = fh.tell() - bytes_before
+                logger.info(f"[{job_id}] page {pages}/{max_pages} depth={depth} {page_ms}ms +{bytes_written}B — {url}")
 
                 if fh.tell() >= max_bytes:
-                    logger.warning(f"Capture {job_id}: size limit {max_bytes // (1024*1024)} MB reached, stopping")
+                    logger.warning(f"[{job_id}] size limit {max_bytes // (1024*1024)} MB reached, stopping")
                     size_capped = True
                     break
 
                 if "text/html" in response.headers.get("Content-Type", ""):
                     soup = BeautifulSoup(response.text, "lxml")
                     assets, size_capped = self._capture_assets(
-                        writer, url, soup, timeout, fh, max_bytes, assets
+                        writer, url, soup, timeout, fh, max_bytes, assets, job_id
                     )
                     if size_capped:
-                        logger.warning(f"Capture {job_id}: size limit reached during asset fetch, stopping")
+                        logger.warning(f"[{job_id}] size limit reached during asset fetch, stopping")
                         break
 
                     if depth < max_depth:
@@ -104,7 +109,12 @@ class WARCCaptureProvider(CaptureProvider):
 
                 time.sleep(settings.crawl_delay)
 
+        elapsed = time.monotonic() - job_start
         size = dest.stat().st_size
+        logger.info(
+            f"[{job_id}] capture done: {pages} pages, {assets} assets, "
+            f"{size} bytes, {elapsed:.1f}s elapsed"
+        )
         return CaptureResult(
             job_id=job_id,
             url=start_url,
@@ -125,7 +135,8 @@ class WARCCaptureProvider(CaptureProvider):
     # ── private helpers ─────────────────────────────────────────────
 
     def _write_record(self, writer: WARCWriter, url: str, response) -> None:
-        status_line = f"HTTP/1.1 {response.status_code} {response.reason}"
+        reason = getattr(response, "reason_phrase", None) or getattr(response, "reason", "")
+        status_line = f"HTTP/1.1 {response.status_code} {reason}"
         headers = [(k, v) for k, v in response.headers.items()]
         http_headers = StatusAndHeaders(status_line, headers, protocol="HTTP/1.1")
         payload = response.content
@@ -147,6 +158,7 @@ class WARCCaptureProvider(CaptureProvider):
         fh,
         max_bytes: int,
         captured: int,
+        job_id: str = "",
     ) -> tuple:
         """Fetch same-host assets. Returns (total_captured, size_capped)."""
         allowed_host = urlparse(base_url).netloc
@@ -165,12 +177,17 @@ class WARCCaptureProvider(CaptureProvider):
                     continue
                 if parsed.netloc != allowed_host:
                     continue
+                asset_start = time.monotonic()
+                bytes_before = fh.tell()
                 try:
                     resp = self._tor.get_with_retries(asset_url, timeout=timeout)
                     self._write_record(writer, asset_url, resp)
                     captured += 1
+                    asset_ms = int((time.monotonic() - asset_start) * 1000)
+                    bytes_written = fh.tell() - bytes_before
+                    logger.debug(f"[{job_id}] asset {captured} {asset_ms}ms +{bytes_written}B — {asset_url}")
                 except Exception as exc:
-                    logger.debug(f"Capture: asset skip {asset_url}: {exc}")
+                    logger.debug(f"[{job_id}] asset skip {asset_url}: {exc}")
                 if fh.tell() >= max_bytes:
                     return captured, True
         return captured, False

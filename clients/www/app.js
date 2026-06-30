@@ -1,4 +1,7 @@
-const API_BASE_URL = "http://api.dw.13h.be";
+const _h = window.location.hostname;
+const API_BASE_URL = (_h === "localhost" || _h === "127.0.0.1" || _h === "")
+  ? "http://localhost:8337"
+  : "http://api.dw.13h.be";
 const CLIENT_ID_KEY = "ognon-client-id";
 const API_KEY_KEY = "ognon-api-key";
 const POLL_DELAY_MS = 1000;
@@ -446,6 +449,23 @@ function formatDate(value) {
 }
 
 function renderResults(result) {
+  // Capture job
+  if (result?.download_url) {
+    const url = `${API_BASE_URL}${result.download_url}`;
+    const pages = result.pages_captured ?? "-";
+    const size = result.size_bytes ? `${(result.size_bytes / 1024).toFixed(0)} Ko` : "-";
+    summary.textContent = `Archive WARC — ${pages} page(s) capturee(s), ${size}.`;
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = url;
+    a.textContent = "Telecharger l'archive .warc.gz";
+    a.download = "";
+    li.append(a);
+    results.replaceChildren(li);
+    return;
+  }
+
+  // Search job
   const items = result?.results || [];
   const total = result?.total ?? items.length;
   const pages = result?.crawled_pages ?? 0;

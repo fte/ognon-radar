@@ -76,8 +76,9 @@ h2 {
 .workspace {
   display: grid;
   grid-template-columns: minmax(230px, .78fr) minmax(0, 1.18fr) minmax(280px, .92fr);
+  grid-template-rows: auto;
   gap: 14px;
-  padding-bottom: 42px;
+  padding-bottom: 14px;
 }
 
 section {
@@ -88,12 +89,46 @@ section {
   padding: 18px;
 }
 
-.endpoint-panel {
-  grid-row: span 2;
+.credentials-panel {
+  grid-column: 1 / -1;
+}
+
+.request-panel {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.middle-col {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.middle-col section {
+  min-width: 0;
 }
 
 .result-panel {
-  grid-column: 2 / -1;
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.scenario-footer {
+  width: min(1180px, calc(100% - 32px));
+  margin-inline: auto;
+  padding-bottom: 42px;
+}
+
+.scenario-footer .endpoint-panel {
+  border-radius: 8px;
+}
+
+.sablier {
+  font-size: 1rem;
+  vertical-align: middle;
 }
 
 .section-head {
@@ -158,6 +193,11 @@ output[data-state="cancelled"] {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.poll-log {
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 .endpoint-list li {
@@ -538,7 +578,8 @@ article footer {
     grid-template-columns: 1fr;
   }
 
-  .endpoint-panel,
+  .request-panel,
+  .middle-col,
   .result-panel,
   .credentials-panel {
     grid-column: auto;

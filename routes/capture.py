@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from config import settings
+from core.auth import generate_client_id
 from core.job_manager import job_manager
 from models.schemas import CaptureRequest, JobCreatedResponse
 
@@ -30,9 +31,11 @@ async def capture_onion_site(request: CaptureRequest) -> JobCreatedResponse:
     """
     job_id = job_manager.submit_capture_job(request.model_dump())
     now = datetime.now(timezone.utc).isoformat()
+    client_id = generate_client_id()
     logger.info(f"Capture job {job_id} queued for {request.start_url}")
     return JobCreatedResponse(
         job_id=job_id,
+        client_id=client_id,
         status="queued",
         created_at=now,
         poll_url=f"/api/v1/jobs/{job_id}",
