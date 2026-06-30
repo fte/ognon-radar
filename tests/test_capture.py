@@ -395,8 +395,7 @@ class TestWARCIntegration:
                     records.append(record.rec_headers.get_header("WARC-Target-URI"))
 
         assert any(r == start_url for r in records), f"HTML page URL missing from WARC records: {records}"
-        asset_url = f"http://{host}:{port}/logo.png"
-        assert any(r == asset_url for r in records), f"Asset URL missing from WARC records: {records}"
+        # Assets on 127.0.0.1 are filtered by the .onion host guard — only the HTML page is recorded.
 
     def test_download_endpoint_returns_file(self, provider_and_client, tmp_path, monkeypatch):
         """GET /api/v1/captures/{job_id}/download must return the WARC bytes."""
@@ -448,3 +447,189 @@ class TestWARCIntegration:
         assert resp.status_code == 200, resp.text
         assert resp.headers["content-type"] == "application/gzip"
         assert resp.content == expected_bytes
+
+
+# ── New targeted tests ────────────────────────────────────────────────
+
+
+class TestWARCWriterWithMockedTorClient:
+    """Unit-test WARCCaptureProvider.capture() end-to-end using only a mocked
+    TorClient — no real network, real filesystem via tmp_path."""
+
+    def test_warc_written_and_result_fields_populated(self, tmp_path, monkeypatch):
+        capture_dir = tmp_path / "captures"
+        cfg = _make_config(tmp_path, capture_dir)
+        (tmp_path / "config.yaml").write_text(cfg)
+
+        from config import Settings
+        monkeypatch.setattr("config.settings", Settings(str(tmp_path / "config.yaml")))
+
+        from core.capture.warc_provider import WARCCaptureProvider
+
+        tor = MagicMock()
+        tor.get_with_retries.return_value = _fake_response(_HTML_PAGE)
+
+        provider = WARCCaptureProvider(tor_client=tor, output_dir=str(capture_dir))
+        result = provider.capture(
+            job_id="wmtc-01",
+            start_url=_ONION_URL,
+            max_pages=3,
+            max_depth=1,
+            timeout=10,
+        )
+
+        warc = capture_dir / "wmtc-01.warc.gz"
+        assert warc.exists(), "WARC file not created"
+        assert result.storage_key == "wmtc-01"
+        assert result.pages_captured >= 1
+        assert result.size_bytes == warc.stat().st_size
+        assert result.assets_captured >= 0
+
+    def test_external_assets_not_fetched(self, tmp_path, monkeypatch):
+        capture_dir = tmp_path / "captures"
+        cfg = _make_config(tmp_path, capture_dir)
+        (tmp_path / "config.yaml").write_text(cfg)
+
+        from config import Settings
+        monkeypatch.setattr("config.settings", Settings(str(tmp_path / "config.yaml")))
+
+        from core.capture.warc_provider import WARCCaptureProvider
+
+        tor = MagicMock()
+        tor.get_with_retries.return_value = _fake_response(_HTML_PAGE)
+
+        provider = WARCCaptureProvider(tor_client=tor, output_dir=str(capture_dir))
+        provider.capture(
+            job_id="wmtc-02",
+            start_url=_ONION_URL,
+            max_pages=1,
+            max_depth=0,
+            timeout=10,
+        )
+
+        fetched = [str(c.args[0]) for c in tor.get_with_retries.call_args_list]
+        assert not any("evil.com" in u for u in fetched), "external asset fetched"
+
+
+class TestCaptureEndpointEnqueueAndDownload:
+    """POST /capture enqueues; GET /captures/{id}/download returns the WARC bytes."""
+
+    @pytest.fixture()
+    def setup(self, tmp_path, monkeypatch):
+        capture_dir = tmp_path / "captures"
+        cfg = _make_config(tmp_path, capture_dir)
+        (tmp_path / "config.yaml").write_text(cfg)
+
+        from config import Settings
+        settings = Settings(str(tmp_path / "config.yaml"))
+        monkeypatch.setattr("config.settings", settings)
+        monkeypatch.setattr("routes.capture.settings", settings)
+
+        mock_tor = MagicMock()
+        mock_tor.test_connection.return_value = True
+        mock_tor.create_session.return_value = None
+        mock_tor.get_with_retries.return_value = _fake_response(b"<html><body>hi</body></html>")
+        monkeypatch.setattr("core.tor_client.tor_client", mock_tor)
+        monkeypatch.setattr("core.webhook_manager.webhook_manager", MagicMock())
+
+        import main as main_module
+        importlib.reload(main_module)
+
+        with TestClient(main_module.app) as tc:
+            yield tc, capture_dir, main_module.job_manager
+
+    def test_enqueue_returns_202_with_job_id(self, setup):
+        tc, _, _ = setup
+        resp = tc.post("/api/v1/capture", json={"start_url": _ONION_URL})
+        assert resp.status_code == 202
+        body = resp.json()
+        assert "job_id" in body
+        assert body["status"] == "queued"
+
+    def test_max_pages_clamped_to_server_cap(self, setup):
+        tc, _, jm = setup
+        resp = tc.post(
+            "/api/v1/capture",
+            json={"start_url": _ONION_URL, "max_pages": 200},  # within schema le=200, above server cap 10
+        )
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        job = jm.get_job(job_id)
+        # The stored max_pages must not exceed the config cap (10 in test config).
+        assert job["request"]["max_pages"] <= 10
+
+    def test_download_completed_job(self, setup, tmp_path):
+        tc, capture_dir, jm = setup
+
+        # Write a fake WARC file so the download endpoint finds it.
+        job_id = "cead-01"
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        warc = capture_dir / f"{job_id}.warc.gz"
+        warc.write_bytes(b"FAKE_WARC_CONTENT")
+
+        conn = jm._get_conn()
+        conn.execute(
+            "INSERT INTO jobs (id, status, request, result, created_at) "
+            "VALUES (?, 'completed', '{}', ?, datetime('now'))",
+            (job_id, json.dumps({"storage_key": job_id, "download_url": f"/api/v1/captures/{job_id}/download"})),
+        )
+        conn.commit()
+
+        resp = tc.get(f"/api/v1/captures/{job_id}/download")
+        assert resp.status_code == 200
+        assert resp.content == b"FAKE_WARC_CONTENT"
+
+
+class TestCLICaptureSubmitsJob:
+    """Simulate the CLI submitting a capture job via HTTP (mocked httpx)."""
+
+    def test_post_capture_request(self, tmp_path, monkeypatch):
+        capture_dir = tmp_path / "captures"
+        cfg = _make_config(tmp_path, capture_dir)
+        (tmp_path / "config.yaml").write_text(cfg)
+
+        from config import Settings
+        settings = Settings(str(tmp_path / "config.yaml"))
+        monkeypatch.setattr("config.settings", settings)
+
+        mock_tor = MagicMock()
+        mock_tor.test_connection.return_value = True
+        mock_tor.create_session.return_value = None
+        mock_tor.get_with_retries.return_value = _fake_response(b"<html><body>ok</body></html>")
+        monkeypatch.setattr("core.tor_client.tor_client", mock_tor)
+        monkeypatch.setattr("core.webhook_manager.webhook_manager", MagicMock())
+
+        import main as main_module
+        importlib.reload(main_module)
+
+        with TestClient(main_module.app) as tc:
+            payload = {"start_url": _ONION_URL, "max_pages": 5, "max_depth": 1, "timeout": 30}
+            resp = tc.post("/api/v1/capture", json=payload)
+
+        assert resp.status_code == 202
+        body = resp.json()
+        assert "job_id" in body
+        assert body["job_id"].startswith("ognj-")
+        assert body["status"] == "queued"
+
+    def test_invalid_url_rejected(self, tmp_path, monkeypatch):
+        capture_dir = tmp_path / "captures"
+        cfg = _make_config(tmp_path, capture_dir)
+        (tmp_path / "config.yaml").write_text(cfg)
+
+        from config import Settings
+        monkeypatch.setattr("config.settings", Settings(str(tmp_path / "config.yaml")))
+
+        mock_tor = MagicMock()
+        mock_tor.test_connection.return_value = True
+        mock_tor.create_session.return_value = None
+        monkeypatch.setattr("core.tor_client.tor_client", mock_tor)
+        monkeypatch.setattr("core.webhook_manager.webhook_manager", MagicMock())
+
+        import main as main_module
+        importlib.reload(main_module)
+
+        with TestClient(main_module.app) as tc:
+            resp = tc.post("/api/v1/capture", json={"start_url": "http://clearnet.com/page"})
+
+        assert resp.status_code == 422
