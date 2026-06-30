@@ -53,13 +53,8 @@ async def download_capture(job_id: str) -> FileResponse:
     if job["status"] != "completed":
         raise HTTPException(status_code=409, detail=f"Job is {job['status']}, not completed")
 
-    result = job.get("result") or {}
-    storage_key = result.get("storage_key")
-    if not storage_key:
-        raise HTTPException(status_code=404, detail="Archive file not found")
-
-    resolved = Path(storage_key).resolve()
     output_dir = Path(settings.capture["output_dir"]).resolve()
+    resolved = (output_dir / f"{job_id}.warc.gz").resolve()
     if not resolved.is_relative_to(output_dir):
         raise HTTPException(status_code=403, detail="Invalid archive path")
     if not resolved.exists():

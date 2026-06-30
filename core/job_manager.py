@@ -229,7 +229,7 @@ class JobManager(SqliteMixin):
         request_data = {
             **request_data,
             "_job_type": "capture",
-            "max_pages": min(request_data.get("max_pages", 20), 200),
+            "max_pages": min(request_data.get("max_pages", 20), settings.capture_max_pages),
             "max_depth": min(request_data.get("max_depth", 2), 5),
             "timeout": min(max(request_data.get("timeout", settings.default_timeout), 10), 120),
         }
@@ -349,9 +349,10 @@ class JobManager(SqliteMixin):
         result = provider.capture(
             job_id=job_id,
             start_url=request_data["start_url"],
-            max_pages=request_data.get("max_pages", 20),
+            max_pages=min(request_data.get("max_pages", 20), settings.capture_max_pages),
             max_depth=request_data.get("max_depth", 2),
             timeout=request_data.get("timeout", settings.default_timeout),
+            max_size_mb=settings.capture_max_size_mb,
         )
         download_url = provider.get_download_url(result.storage_key)
         return {

@@ -23,6 +23,7 @@ class CaptureProvider(ABC):
         max_pages: int,
         max_depth: int,
         timeout: int,
+        max_size_mb: int = 500,
     ) -> CaptureResult: ...
 
     @abstractmethod

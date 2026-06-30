@@ -142,6 +142,17 @@ docker-compose up --build
 docker-compose --profile testing up
 ```
 
+## Disk Usage Warning
+
+The `./ognon-jobs` directory is bind-mounted into the container at `/app/data`. Capture jobs write WARC archives to `/app/data/captures` (persisted on the host under `ognon-jobs/captures/`).
+
+**WARC files can be large.** A single capture of a multi-page site can easily produce hundreds of megabytes. Before running capture jobs at scale:
+
+- Set a quota or `max_size_mb` limit in `config.yaml` under `capture`.
+- Monitor disk usage: `du -sh ./ognon-jobs/captures/`
+- Clean up completed captures manually or set a rotation policy.
+- Consider mounting `ognon-jobs/` on a separate volume with a hard disk quota to prevent the host from running out of space.
+
 ## 📚 Documentation
 
 - **Swagger UI**: http://localhost:8337/docs

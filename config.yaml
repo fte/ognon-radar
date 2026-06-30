@@ -54,7 +54,8 @@ cors:
 capture:
   backend: warc              # warc | r2 | b2 (future providers)
   output_dir: /app/data/captures
-  max_size_mb: 500
+  max_pages: 50              # Hard server-side cap on pages per capture job
+  max_size_mb: 500           # Hard server-side cap on WARC file size
 
 # Job Queue Settings
 jobs:

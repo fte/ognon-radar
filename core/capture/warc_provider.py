@@ -48,12 +48,13 @@ class WARCCaptureProvider(CaptureProvider):
         max_pages: int,
         max_depth: int,
         timeout: int,
+        max_size_mb: int = 500,
     ) -> CaptureResult:
         dest = (self._output_dir / f"{job_id}.warc.gz").resolve()
         if not dest.is_relative_to(self._output_dir.resolve()):
             raise ValueError(f"Resolved capture path escapes output_dir: {dest}")
 
-        max_bytes = settings.capture.get("max_size_mb", 500) * 1024 * 1024
+        max_bytes = max_size_mb * 1024 * 1024
         pages = 0
         assets = 0
         size_capped = False
@@ -121,14 +122,15 @@ class WARCCaptureProvider(CaptureProvider):
             pages_captured=pages,
             assets_captured=assets,
             size_bytes=size,
-            storage_key=str(dest),
+            storage_key=job_id,
         )
 
     def get_download_url(self, storage_key: str) -> str:
-        return storage_key  # local path; served by the API via FileResponse
+        # storage_key is the job_id; serve via the local API download route
+        return f"/api/v1/captures/{storage_key}/download"
 
     def delete(self, storage_key: str) -> None:
-        path = Path(storage_key)
+        path = (self._output_dir / f"{storage_key}.warc.gz").resolve()
         if path.exists():
             path.unlink()
 

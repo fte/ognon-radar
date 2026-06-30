@@ -79,11 +79,12 @@ class Settings:
         self.webhook_allow_insecure_urls: bool = webhook_config.get('allow_insecure_urls', False)
 
         # Capture
-        self.capture: dict = config.get('capture', {
-            'backend': 'warc',
-            'output_dir': '/app/data/captures',
-            'max_size_mb': 500,
-        })
+        capture_config = config.get('capture', {})
+        self.capture: dict = capture_config  # kept for backward compat with warc_provider
+        self.capture_backend: str = capture_config.get('backend', 'warc')
+        self.capture_output_dir: str = capture_config.get('output_dir', '/app/data/captures')
+        self.capture_max_pages: int = capture_config.get('max_pages', 50)
+        self.capture_max_size_mb: int = capture_config.get('max_size_mb', 500)
 
 
 # Global settings instance
