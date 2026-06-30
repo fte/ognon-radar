@@ -11,13 +11,13 @@ import json
 import logging
 import sqlite3
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
+from core.auth import generate_job_id
 from core.db_mixin import SqliteMixin
 from core.tor_client import tor_client
 from core.crawler import OnionCrawler, resolve_search_url
@@ -125,7 +125,7 @@ class JobManager(SqliteMixin):
         Returns:
             job_id (UUID string)
         """
-        job_id = uuid.uuid4().hex[:16]
+        job_id = generate_job_id()
         now = datetime.now(timezone.utc).isoformat()
 
         conn = self._get_conn()
@@ -224,7 +224,7 @@ class JobManager(SqliteMixin):
 
     def submit_capture_job(self, request_data: dict, client_id: str = "") -> str:
         """Enqueue a new capture job. Returns job_id."""
-        job_id = uuid.uuid4().hex[:16]
+        job_id = generate_job_id()
         now = datetime.now(timezone.utc).isoformat()
         request_data = {
             **request_data,

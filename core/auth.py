@@ -20,12 +20,21 @@ _NOUNS = [
 ]
 
 
-def generate_client_id() -> str:
-    """Return a human-readable client ID with CSPRNG entropy, e.g. 'swift-falcon-aB3xY9kZ'."""
+def _readable_id(prefix: str) -> str:
     adj = secrets.choice(_ADJECTIVES)
     noun = secrets.choice(_NOUNS)
-    suffix = secrets.token_urlsafe(8)  # ~48 bits of unguessable entropy
-    return f"{adj}-{noun}-{suffix}"
+    suffix = secrets.token_urlsafe(6)  # ~36 bits of entropy, 8 url-safe chars
+    return f"{prefix}-{adj}-{noun}-{suffix}"
+
+
+def generate_client_id() -> str:
+    """Return a memorable client ID, e.g. 'ognu-swift-falcon-aB3xY9'."""
+    return _readable_id("ognu")
+
+
+def generate_job_id() -> str:
+    """Return a memorable job ID, e.g. 'ognj-dark-raven-kZ9mXp'."""
+    return _readable_id("ognj")
 
 
 def require_api_key(x_api_key: Optional[str] = Header(None)) -> None:

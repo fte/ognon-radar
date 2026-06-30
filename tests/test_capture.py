@@ -265,7 +265,6 @@ class TestCaptureRoutes:
 
     def test_download_path_traversal_rejected(self, client_capture, tmp_path):
         """A storage_key pointing outside output_dir must return 403."""
-        import uuid
         tc, capture_dir = client_capture
 
         bad_key = str(tmp_path / "secret.txt")
@@ -273,8 +272,9 @@ class TestCaptureRoutes:
 
         # Insert a completed job directly — avoids a background thread race.
         import main as main_module
+        from core.auth import generate_job_id
         jm = main_module.job_manager
-        job_id = str(uuid.uuid4().hex)
+        job_id = generate_job_id()
         conn = jm._get_conn()
         conn.execute(
             "INSERT INTO jobs (id, status, request, result, created_at) VALUES (?, 'completed', '{}', ?, datetime('now'))",
