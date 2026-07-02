@@ -10,7 +10,7 @@ import os
 import time
 from collections import deque
 from pathlib import Path
-from typing import Set
+from typing import Optional, Set
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -18,7 +18,7 @@ from warcio.warcwriter import WARCWriter
 from warcio.statusandheaders import StatusAndHeaders
 
 from config import settings
-from core.capture.base import CaptureProvider, CaptureResult
+from core.capture.base import CaptureProvider, CaptureResult, ProgressCallback
 from core.crawler import is_valid_onion_url, BLACKLIST_PATHS
 from core.tor_client import TorClient
 
@@ -50,8 +50,11 @@ class WARCCaptureProvider(CaptureProvider):
         max_depth: int,
         timeout: int,
         max_size_mb: int = 500,
+        archive_name: Optional[str] = None,
+        progress_cb: Optional[ProgressCallback] = None,
     ) -> CaptureResult:
-        dest = (self._output_dir / f"{job_id}.warc.gz").resolve()
+        safe_name = archive_name or job_id
+        dest = (self._output_dir / f"{safe_name}.warc.gz").resolve()
         if not dest.is_relative_to(self._output_dir.resolve()):
             raise ValueError(f"Resolved capture path escapes output_dir: {dest}")
 
@@ -89,6 +92,8 @@ class WARCCaptureProvider(CaptureProvider):
                 page_ms = int((time.monotonic() - page_start) * 1000)
                 bytes_written = fh.tell() - bytes_before
                 logger.info(f"[{job_id}] page {pages}/{max_pages} depth={depth} {page_ms}ms +{bytes_written}B — {url}")
+                if progress_cb:
+                    progress_cb(pages, assets, fh.tell())
 
                 if bytes_before + bytes_written >= max_bytes:
                     logger.warning(f"[{job_id}] size limit {max_bytes // (1024*1024)} MB reached, stopping")
@@ -112,6 +117,11 @@ class WARCCaptureProvider(CaptureProvider):
                 time.sleep(settings.crawl_delay)
 
         elapsed = time.monotonic() - job_start
+
+        if pages == 0:
+            dest.unlink(missing_ok=True)
+            raise RuntimeError(f"No pages could be fetched from {start_url} — archive not created")
+
         size = dest.stat().st_size
         logger.info(
             f"[{job_id}] capture done: {pages} pages, {assets} assets, "
@@ -123,7 +133,7 @@ class WARCCaptureProvider(CaptureProvider):
             pages_captured=pages,
             assets_captured=assets,
             size_bytes=size,
-            storage_key=job_id,
+            storage_key=safe_name,
         )
 
     def get_download_url(self, storage_key: str) -> str:

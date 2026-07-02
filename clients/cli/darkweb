@@ -7,13 +7,13 @@
 # Commands:
 #   health
 #   search TERM [--url URL] [--depth N] [--pages N] [--results N] [--timeout N] [--client ID]
-#   poll   JOB_ID [--interval N] [--offset N] [--limit N]
+#   poll   JOB_ID [--interval N] [--client ID]
 #   jobs   [--status STATUS] [--limit N] [--offset N] [--client ID]
 #   job    JOB_ID [--offset N] [--limit N]
 #   cancel  JOB_ID
 #   delete  JOB_ID
 #   purge   [--status STATUS]
-#   capture URL [--pages N] [--depth N] [--timeout N] [--out FILE]
+#   capture URL [--pages N] [--depth N] [--timeout N] [--label TEXT] [--client ID] [--out FILE]
 #
 # Flags:
 #   --dry-run       Print the curl command without executing it
@@ -188,16 +188,19 @@ cmd_search() {
 cmd_poll() {
     [[ $# -lt 1 ]] && die "poll requires JOB_ID"
     local job_id="$1"; shift
-    local interval=2
+    local interval=2 client=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --interval) interval="$2"; shift 2 ;;
+            --client)   client="$2";   shift 2 ;;
             *) die "unknown option: $1" ;;
         esac
     done
 
     local url="${HOST}/api/v1/jobs/${job_id}/stream?interval=${interval}"
+    local extra_headers=()
+    [[ -n "$client" ]] && extra_headers=(--header "X-Client-ID: ${client}")
 
     echo
     echo "${CYAN}${BOLD}⏳ streaming ${job_id}${RESET}"
@@ -242,7 +245,8 @@ cmd_poll() {
     done < <(curl --no-buffer --silent --show-error \
         --request GET \
         --url "${url}" \
-        --header "Accept: text/event-stream" 2>&1)
+        --header "Accept: text/event-stream" \
+        "${extra_headers[@]+"${extra_headers[@]}"}" 2>&1)
 
     [[ "$final_status" == "failed" ]] && exit 1
     return 0
@@ -339,7 +343,7 @@ cmd_purge() {
 cmd_capture() {
     [[ $# -lt 1 ]] && die "capture requires URL"
     local url="$1"; shift
-    local pages="" depth="" timeout="" out=""
+    local pages="" depth="" timeout="" out="" label="" client=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -347,6 +351,8 @@ cmd_capture() {
             --depth)   depth="$2";   shift 2 ;;
             --timeout) timeout="$2"; shift 2 ;;
             --out)     out="$2";     shift 2 ;;
+            --label)   label="$2";   shift 2 ;;
+            --client)  client="$2";  shift 2 ;;
             *) die "unknown option: $1" ;;
         esac
     done
@@ -355,13 +361,18 @@ cmd_capture() {
     [[ -n "$pages"   ]] && body+=",\"max_pages\":${pages}"
     [[ -n "$depth"   ]] && body+=",\"max_depth\":${depth}"
     [[ -n "$timeout" ]] && body+=",\"timeout\":${timeout}"
+    [[ -n "$label"   ]] && body+=",\"label\":\"${label}\""
     body+="}"
+
+    local extra_headers=()
+    [[ -n "$client" ]] && extra_headers=(--header "X-Client-ID: ${client}")
 
     run curl \
         --request POST \
         --url "${HOST}/api/v1/capture" \
         --header "Content-Type: application/json" \
         --header "Accept: application/json" \
+        "${extra_headers[@]+"${extra_headers[@]}"}" \
         --data "${body}"
 
     if ! $LIVE || [[ -z "$LAST_BODY" ]]; then return; fi

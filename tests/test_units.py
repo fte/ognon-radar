@@ -27,7 +27,7 @@ api:
   port: 8000
 tor:
   proxy: "socks5h://127.0.0.1:9050"
-  check_url: "http://check.torproject.org/"
+  check_url: "https://check.torproject.org/"
 crawling:
   delay: 0
   max_depth: 2

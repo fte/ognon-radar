@@ -475,6 +475,46 @@ article footer {
   font-size: .85rem;
 }
 
+.capture-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-block-start: 2px;
+}
+
+.btn-capture {
+  display: inline-flex;
+  align-items: center;
+  min-height: 0;
+  width: auto;
+  padding: 3px 10px;
+  font-size: .8rem;
+  font-weight: 600;
+}
+
+.capture-status {
+  font-size: .82rem;
+  color: var(--muted);
+}
+
+.capture-status[data-state="running"] {
+  color: var(--accent);
+}
+
+.capture-status[data-state="completed"] {
+  color: var(--ok, #3a9e6f);
+}
+
+.capture-status[data-state="failed"] {
+  color: var(--danger, #c0392b);
+}
+
+.capture-download-link {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
 .credentials-panel {
   grid-column: 1 / -1;
 }

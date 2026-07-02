@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Callable, Optional
 
 
 @dataclass
@@ -10,6 +11,9 @@ class CaptureResult:
     assets_captured: int
     size_bytes: int
     storage_key: str  # local path or S3/R2 object key
+
+
+ProgressCallback = Callable[[int, int, int], None]  # pages, assets, size_bytes
 
 
 class CaptureProvider(ABC):
@@ -24,6 +28,7 @@ class CaptureProvider(ABC):
         max_depth: int,
         timeout: int,
         max_size_mb: int = 500,
+        progress_cb: Optional[ProgressCallback] = None,
     ) -> CaptureResult: ...
 
     @abstractmethod

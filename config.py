@@ -37,7 +37,7 @@ class Settings:
         # Tor Configuration
         tor_config = config.get('tor', {})
         self.tor_proxy: str = tor_config.get('proxy', 'socks5h://tor:9050')
-        self.tor_check_url: str = tor_config.get('check_url', 'http://check.torproject.org/')
+        self.tor_check_url: str = tor_config.get('check_url', 'https://check.torproject.org/')
         
         # Crawling Configuration
         crawl_config = config.get('crawling', {})
@@ -64,6 +64,9 @@ class Settings:
         # CORS
         cors_config = config.get('cors', {})
         self.cors_origins: List[str] = cors_config.get('origins', ['*'])
+
+        # Onion-Location
+        self.onion_location: str = config.get('onion_location', '')
 
         # Job Queue
         jobs_config = config.get('jobs', {})

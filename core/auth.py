@@ -51,20 +51,44 @@ def get_is_admin(x_api_key: Optional[str] = Header(None)) -> bool:
     return x_api_key == settings.api_key
 
 
+def _resolve_client_id(client_id: Optional[str], api_key: Optional[str]) -> str:
+    if api_key:
+        if api_key != settings.api_key:
+            from core.client_keys import client_key_store
+            resolved = client_key_store.get_client_id(api_key)
+            if not resolved:
+                raise HTTPException(status_code=401, detail="Invalid API key")
+            return resolved
+    if not client_id:
+        raise HTTPException(status_code=400, detail="X-Client-ID header is required")
+    return client_id
+
+
+def require_client_id_sse(
+    job_id: str,  # path param, injected by FastAPI
+    x_client_id: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+    token: Optional[str] = None,  # ephemeral stream token (query param)
+) -> str:
+    """
+    Auth for SSE stream endpoints. Accepts either:
+    - Normal headers (X-Client-ID / X-API-Key) for programmatic clients
+    - ?token= ephemeral token minted by POST /jobs/{id}/stream-token (for EventSource)
+
+    Never accepts raw api_key or client_id as plain query params — they would
+    appear in server logs and browser history.
+    """
+    if token:
+        from core.stream_tokens import redeem
+        client_id = redeem(token, job_id)
+        if not client_id:
+            raise HTTPException(status_code=401, detail="Stream token invalid or expired")
+        return client_id
+    return _resolve_client_id(x_client_id, x_api_key)
+
+
 def require_client_id(
     x_client_id: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None),
 ) -> str:
-    # If a key is presented, validate it strictly — never fall back silently.
-    if x_api_key:
-        if x_api_key != settings.api_key:
-            # Not the admin key: must be a valid client key or it's rejected.
-            from core.client_keys import client_key_store
-            resolved = client_key_store.get_client_id(x_api_key)
-            if not resolved:
-                raise HTTPException(status_code=401, detail="Invalid API key")
-            return resolved
-        # Admin key: fall through and require X-Client-ID to scope the operation.
-    if not x_client_id:
-        raise HTTPException(status_code=400, detail="X-Client-ID header is required")
-    return x_client_id
+    return _resolve_client_id(x_client_id, x_api_key)

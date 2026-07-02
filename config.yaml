@@ -11,7 +11,7 @@ api:
 # Tor Configuration
 tor:
   proxy: "socks5h://tor:9050"
-  check_url: "http://check.torproject.org/"
+  check_url: "https://check.torproject.org/"
 
 # Crawling Settings
 crawling:
@@ -49,6 +49,9 @@ security:
 cors:
   origins:
     - "*"  # Configure properly for production
+
+# Onion-Location header (advertise .onion counterpart to Tor Browser)
+onion_location: ""  # e.g. "http://youraddress.onion"
 
 # Capture Settings
 capture:

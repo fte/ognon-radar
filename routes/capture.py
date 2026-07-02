@@ -5,10 +5,11 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from config import settings
+from core.auth import require_client_id
 from core.job_manager import job_manager
 from models.schemas import CaptureRequest, JobCreatedResponse
 
@@ -18,7 +19,10 @@ router = APIRouter(prefix="/api/v1", tags=["capture"])
 
 
 @router.post("/capture", response_model=JobCreatedResponse, status_code=202)
-async def capture_onion_site(request: CaptureRequest) -> JobCreatedResponse:
+async def capture_onion_site(
+    request: CaptureRequest,
+    client_id: str = Depends(require_client_id),
+) -> JobCreatedResponse:
     """
     Submit a capture job for a .onion site.
 
@@ -26,12 +30,12 @@ async def capture_onion_site(request: CaptureRequest) -> JobCreatedResponse:
     Returns immediately with a job_id. Poll GET /api/v1/jobs/{job_id} for status,
     then download via GET /api/v1/captures/{job_id}/download.
     """
-    job_id = job_manager.submit_capture_job(request.model_dump())
+    job_id = job_manager.submit_capture_job(request.model_dump(), client_id=client_id)
     now = datetime.now(timezone.utc).isoformat()
-    logger.info(f"Capture job {job_id} queued for {request.start_url}")
+    logger.info(f"Capture job {job_id} queued for {request.start_url} (client={client_id})")
     return JobCreatedResponse(
         job_id=job_id,
-        client_id="",
+        client_id=client_id,
         status="queued",
         created_at=now,
         poll_url=f"/api/v1/jobs/{job_id}",
@@ -49,16 +53,20 @@ async def download_capture(job_id: str) -> FileResponse:
     if job["status"] != "completed":
         raise HTTPException(status_code=409, detail=f"Job is {job['status']}, not completed")
 
+    result = job.get("result") or {}
+    storage_key = result.get("storage_key", job_id)
+
     output_dir = Path(settings.capture_output_dir).resolve()
-    resolved = (output_dir / f"{job_id}.warc.gz").resolve()
+    resolved = (output_dir / f"{storage_key}.warc.gz").resolve()
     if not resolved.is_relative_to(output_dir):
         raise HTTPException(status_code=403, detail="Invalid archive path")
     if not resolved.exists():
         raise HTTPException(status_code=404, detail="Archive file not found")
 
+    filename = f"{storage_key}.warc.gz"
     return FileResponse(
         path=str(resolved),
         media_type="application/gzip",
-        filename=f"{job_id}.warc.gz",
-        headers={"Content-Disposition": f'attachment; filename="{job_id}.warc.gz"'},
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

@@ -9,7 +9,7 @@ api:
 
 tor:
   proxy: "socks5h://127.0.0.1:9050"
-  check_url: "http://check.torproject.org/"
+  check_url: "https://check.torproject.org/"
 
 crawling:
   delay: 7
@@ -40,6 +40,9 @@ cors:
   # Empty list blocks all cross-origin browser requests (safe default).
   # Set to ["*"] only if this API is intentionally fully public.
   origins: []
+
+# Onion-Location header (advertise .onion counterpart to Tor Browser)
+onion_location: "http://ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion"
 
 jobs:
   max_workers: 2

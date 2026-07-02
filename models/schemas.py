@@ -126,6 +126,7 @@ class JobResponse(BaseModel):
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = Field(...)
     request: Dict[str, Any] = Field(..., description="Original search request parameters")
     result: Optional[SearchResultsPayload] = Field(None, description="Search results (when completed)")
+    progress: Optional[Dict[str, Any]] = Field(None, description="Capture progress while running: {pages, assets, size_bytes}")
     error: Optional[str] = Field(None, description="Error message (when failed)")
     created_at: str = Field(..., description="ISO 8601 creation timestamp")
     started_at: Optional[str] = Field(None, description="ISO 8601 start timestamp")
@@ -148,6 +149,7 @@ class JobListResponse(BaseModel):
 
 class CaptureRequest(BaseModel):
     start_url: str = Field(..., description="Root .onion URL to capture")
+    label: Optional[str] = Field(None, description="Short label included in the archive filename (e.g. search term)", max_length=40)
     max_pages: int = Field(20, ge=1, le=200)
     max_depth: int = Field(2, ge=1, le=5)
     timeout: int = Field(30, ge=10, le=120)
@@ -156,6 +158,15 @@ class CaptureRequest(BaseModel):
     @classmethod
     def validate_onion_url(cls, v: str) -> str:
         return _validate_onion_url(v)
+
+    @field_validator("label")
+    @classmethod
+    def slugify_label(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        import re
+        slug = re.sub(r"[^a-z0-9]+", "-", v.lower().strip()).strip("-")
+        return slug or None
 
 
 class CaptureResultPayload(BaseModel):

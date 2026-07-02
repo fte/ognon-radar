@@ -65,7 +65,7 @@ def extract_onion_links(base_url: str, soup: BeautifulSoup) -> Set[str]:
 # config defines *which* seeds to use; this dict defines *how* to query them.
 _SEARCH_ENGINES = {
     "juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion": "/search/?q=",      # Ahmia
-    "xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion": "/search?query=",  # Torch
+    "xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion": "/cgi-bin/omega/omega?P=",  # Torch
     "tordexpmg4xy32rfp4ovnz7zq5ujoejwq2u26uxxtkscgo5u3losmeid.onion": "/search?q=",      # TorDex
     "haystak5njsmn2hqkewecpaxetahtwhsbsa64jom2k22z5afxhnpxfid.onion": "/search?q=",      # Haystak
     "notevil2ebbr5xjww6nryjta7bycbriyi2vh7an3wcuovlznvobykmad.onion": "/search?q=",      # Not Evil
@@ -154,15 +154,14 @@ def _parse_ahmia_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
 def _parse_torch_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
     """Extract results from Torch search engine.
 
-    Torch renders results as <dt> (title link) + <dd> (snippet) pairs,
-    or as divs with class 'result'. Links point directly to .onion URLs.
+    Torch currently renders results as <tr> rows with direct .onion hrefs.
+    Falls back to the generic parser for older layouts.
     """
     entries = []
     seen_netlocs: Set[str] = set()
 
-    # Try <dt>/<dd> pattern first
-    for dt in soup.select('dt'):
-        a = dt.select_one('a[href]')
+    for tr in soup.select('tr'):
+        a = tr.select_one('a[href]')
         if not a:
             continue
         url = a.get('href', '').strip()
@@ -173,9 +172,7 @@ def _parse_torch_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
             continue
         seen_netlocs.add(netloc)
         title = a.get_text(strip=True) or "No Title"
-        dd = dt.find_next_sibling('dd')
-        snippet = dd.get_text(strip=True) if dd else ""
-        entries.append({'url': url, 'title': title, 'snippet': snippet})
+        entries.append({'url': url, 'title': title, 'snippet': ""})
 
     if entries:
         return entries

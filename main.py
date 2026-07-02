@@ -4,9 +4,9 @@ RESTful API for searching .onion sites via Tor network.
 """
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from config import settings
 from routes import health, search, jobs, capture, webhooks
@@ -78,6 +78,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if settings.onion_location:
+    @app.middleware("http")
+    async def add_onion_location(request: Request, call_next) -> Response:
+        response = await call_next(request)
+        response.headers["Onion-Location"] = settings.onion_location
+        return response
 
 # Include routers
 app.include_router(health.router)

@@ -46,7 +46,7 @@ api:
   port: 8000
 tor:
   proxy: "socks5h://tor:9050"
-  check_url: "http://check.torproject.org/"
+  check_url: "https://check.torproject.org/"
 crawling:
   delay: 0
   max_depth: 1
@@ -203,7 +203,8 @@ class TestRunCapture:
         assert job["status"] == "completed", job.get("error")
         result = job["result"]
         assert result["pages_captured"] >= 1
-        assert result["download_url"] == f"/api/v1/captures/{job_id}/download"
+        storage_key = result["storage_key"]
+        assert result["download_url"] == f"/api/v1/captures/{storage_key}/download"
 
 
 # ── HTTP route tests ──────────────────────────────────────────────────
@@ -237,7 +238,7 @@ def client_capture(_patch_config_capture, monkeypatch):
     import main as main_module
     importlib.reload(main_module)
 
-    with TestClient(main_module.app) as tc:
+    with TestClient(main_module.app, headers={"X-Client-ID": "test-client"}) as tc:
         yield tc, capture_dir
 
 
@@ -428,7 +429,7 @@ class TestWARCIntegration:
         import main as main_module
         importlib.reload(main_module)
 
-        with TestClient(main_module.app) as tc:
+        with TestClient(main_module.app, headers={"X-Client-ID": "test-client"}) as tc:
             jm = main_module.job_manager
             job_id = "integ02"  # matches the capture job_id above
             conn = jm._get_conn()
@@ -533,7 +534,7 @@ class TestCaptureEndpointEnqueueAndDownload:
         import main as main_module
         importlib.reload(main_module)
 
-        with TestClient(main_module.app) as tc:
+        with TestClient(main_module.app, headers={"X-Client-ID": "test-client"}) as tc:
             yield tc, capture_dir, main_module.job_manager
 
     def test_enqueue_returns_202_with_job_id(self, setup):
@@ -600,7 +601,7 @@ class TestCLICaptureSubmitsJob:
         import main as main_module
         importlib.reload(main_module)
 
-        with TestClient(main_module.app) as tc:
+        with TestClient(main_module.app, headers={"X-Client-ID": "test-client"}) as tc:
             payload = {"start_url": _ONION_URL, "max_pages": 5, "max_depth": 1, "timeout": 30}
             resp = tc.post("/api/v1/capture", json=payload)
 
@@ -627,7 +628,7 @@ class TestCLICaptureSubmitsJob:
         import main as main_module
         importlib.reload(main_module)
 
-        with TestClient(main_module.app) as tc:
+        with TestClient(main_module.app, headers={"X-Client-ID": "test-client"}) as tc:
             resp = tc.post("/api/v1/capture", json={"start_url": "http://clearnet.com/page"})
 
         assert resp.status_code == 422

@@ -76,6 +76,30 @@ const endpoints = [
     description: "Configurer et consulter les notifications par client.",
     mode: "example",
   },
+  {
+    key: "capture",
+    method: "POST",
+    path: "/api/v1/capture",
+    title: "Lancer la capture",
+    description: "Archive le site complet en .warc.gz via le proxy Tor.",
+    mode: "live",
+  },
+  {
+    key: "capture-poll",
+    method: "GET",
+    path: "/api/v1/jobs/{capture_id}",
+    title: "Poller la capture",
+    description: "Interroge le statut du job de capture jusqu'a completion.",
+    mode: "live",
+  },
+  {
+    key: "capture-download",
+    method: "GET",
+    path: "/api/v1/captures/{capture_id}/download",
+    title: "Telecharger le WARC",
+    description: "Telechargement de l'archive une fois la capture terminee.",
+    mode: "live",
+  },
 ];
 
 const form = document.querySelector("#search-form");
@@ -101,6 +125,7 @@ const pollLog = document.querySelector("#poll-log");
 
 let activePoll = null;
 let pollCount = 0;
+const capturePolls = new Map(); // capture_job_id → timeout handle
 
 renderEndpoints();
 checkHealth();
@@ -376,6 +401,8 @@ function resetScenario() {
       setEndpointState(endpoint.key, "idle");
     }
   }
+  capturePolls.forEach((es) => { if (es && typeof es.close === "function") es.close(); });
+  capturePolls.clear();
 
   jobId.textContent = "-";
   jobStatus.textContent = "-";
@@ -486,6 +513,9 @@ function renderResult(item) {
   const link = document.createElement("a");
   const snippet = document.createElement("p");
   const footer = document.createElement("footer");
+  const captureBar = document.createElement("div");
+  const captureBtn = document.createElement("button");
+  const captureStatus = document.createElement("output");
 
   link.href = item.url;
   link.textContent = item.title || item.url;
@@ -495,9 +525,130 @@ function renderResult(item) {
   snippet.textContent = item.snippet || "Aucun extrait disponible.";
   footer.textContent = `Occurrences: ${item.term_count ?? "-"} - profondeur: ${item.depth ?? "-"}`;
 
-  article.append(title, snippet, footer);
+  captureBtn.type = "button";
+  captureBtn.className = "btn-capture";
+  captureBtn.textContent = "Capturer";
+  captureStatus.className = "capture-status";
+  captureStatus.value = "";
+  captureBar.className = "capture-bar";
+  captureBar.append(captureBtn, captureStatus);
+
+  captureBtn.addEventListener("click", () => startCapture(item.url, captureBtn, captureStatus));
+
+  article.append(title, snippet, footer, captureBar);
   row.append(article);
   return row;
+}
+
+async function startCapture(url, btn, statusEl) {
+  btn.disabled = true;
+  statusEl.value = "Envoi...";
+  statusEl.dataset.state = "running";
+  setEndpointState("capture", "active");
+  setEndpointState("capture-poll", "idle");
+  setEndpointState("capture-download", "idle");
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/capture`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getClientHeaders() },
+      body: JSON.stringify({ start_url: url }),
+    });
+    const created = await readJson(response);
+    if (!response.ok) {
+      throw new Error(formatApiError(created, response.status));
+    }
+
+    setEndpointState("capture", "done");
+    setEndpointState("capture-poll", "active");
+    addPollLog("POST", "/api/v1/capture", created.status, created.job_id);
+    statusEl.value = "En attente...";
+    streamCapture(created.job_id, btn, statusEl);
+  } catch (error) {
+    setEndpointState("capture", "failed");
+    statusEl.value = error.message;
+    statusEl.dataset.state = "failed";
+    btn.disabled = false;
+  }
+}
+
+async function streamCapture(captureJobId, btn, statusEl) {
+  // Mint a short-lived token via header-authenticated POST — never put api_key in URL
+  let token;
+  try {
+    const resp = await fetch(
+      `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(captureJobId)}/stream-token`,
+      { method: "POST", headers: getClientHeaders() }
+    );
+    const data = await readJson(resp);
+    if (!resp.ok) throw new Error(formatApiError(data, resp.status));
+    token = data.token;
+  } catch (error) {
+    setEndpointState("capture-poll", "failed");
+    statusEl.value = error.message;
+    statusEl.dataset.state = "failed";
+    btn.disabled = false;
+    return;
+  }
+
+  const url = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(captureJobId)}/stream?interval=1&token=${encodeURIComponent(token)}`;
+  const es = new EventSource(url);
+  capturePolls.set(captureJobId, es);
+
+  es.onmessage = ({ data }) => {
+    let job;
+    try { job = JSON.parse(data); } catch { return; }
+
+    const progress = job.progress;
+    const progressLabel = progress
+      ? `${progress.pages} p. — ${(progress.size_bytes / 1024).toFixed(0)} Ko`
+      : "";
+    addPollLog("SSE", `/api/v1/jobs/${shortId(captureJobId)}/stream`, job.status, `capture${progressLabel ? " · " + progressLabel : ""}`);
+
+    if (job.status === "completed") {
+      es.close();
+      capturePolls.delete(captureJobId);
+      setEndpointState("capture-poll", "done");
+      setEndpointState("capture-download", "done");
+      const result = job.result || {};
+      const pages = result.pages_captured ?? "-";
+      const size = result.size_bytes ? `${(result.size_bytes / 1024).toFixed(0)} Ko` : "-";
+      statusEl.value = `${pages} page(s), ${size}`;
+      statusEl.dataset.state = "completed";
+      if (result.download_url) {
+        const a = document.createElement("a");
+        a.href = `${API_BASE_URL}${result.download_url}`;
+        a.textContent = "Telecharger .warc.gz";
+        a.download = "";
+        a.className = "capture-download-link";
+        statusEl.replaceWith(a);
+      }
+      return;
+    }
+
+    if (job.status === "failed" || job.status === "cancelled") {
+      es.close();
+      capturePolls.delete(captureJobId);
+      setEndpointState("capture-poll", "failed");
+      statusEl.value = job.error || `Capture ${job.status}`;
+      statusEl.dataset.state = "failed";
+      btn.disabled = false;
+      return;
+    }
+
+    statusEl.value = progress
+      ? `${statusLabel(job.status)} — ${progress.pages} page(s), ${(progress.size_bytes / 1024).toFixed(0)} Ko`
+      : statusLabel(job.status);
+  };
+
+  es.onerror = () => {
+    es.close();
+    capturePolls.delete(captureJobId);
+    setEndpointState("capture-poll", "failed");
+    statusEl.value = "Connexion SSE perdue";
+    statusEl.dataset.state = "failed";
+    btn.disabled = false;
+  };
 }
 
 function shortId(id) {

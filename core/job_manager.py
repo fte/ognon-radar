@@ -47,6 +47,7 @@ class JobManager(SqliteMixin):
         self.db_path = db_path
         self.max_workers = max_workers
         self._executor: Optional[ThreadPoolExecutor] = None
+        self._capture_progress: Dict[str, Dict[str, int]] = {}
         self.__init_sqlite__()
         self._init_db()
 
@@ -146,7 +147,10 @@ class JobManager(SqliteMixin):
         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if not row:
             return None
-        return self._row_to_dict(row)
+        d = self._row_to_dict(row)
+        if d.get("status") == JobStatus.RUNNING and job_id in self._capture_progress:
+            d["progress"] = self._capture_progress[job_id]
+        return d
 
     def list_jobs(
         self,
@@ -345,15 +349,33 @@ class JobManager(SqliteMixin):
 
     def _run_capture(self, job_id: str, request_data: dict) -> dict:
         from core.capture import get_capture_provider
+        from urllib.parse import urlparse
+
+        self._capture_progress[job_id] = {"pages": 0, "assets": 0, "size_bytes": 0}
+
+        def _on_progress(pages: int, assets: int, size_bytes: int) -> None:
+            self._capture_progress[job_id] = {"pages": pages, "assets": assets, "size_bytes": size_bytes}
+
+        start_url = request_data["start_url"]
+        onion_prefix = urlparse(start_url).hostname.replace(".onion", "")[:10]
+        label = request_data.get("label")
+        archive_name = f"{label}-{onion_prefix}-{job_id}" if label else f"{onion_prefix}-{job_id}"
+
         provider = get_capture_provider()
-        result = provider.capture(
-            job_id=job_id,
-            start_url=request_data["start_url"],
-            max_pages=request_data.get("max_pages", 20),
-            max_depth=request_data.get("max_depth", 2),
-            timeout=request_data.get("timeout", settings.default_timeout),
-            max_size_mb=request_data.get("max_size_mb", settings.capture_max_size_mb),
-        )
+        try:
+            result = provider.capture(
+                job_id=job_id,
+                start_url=start_url,
+                max_pages=request_data.get("max_pages", 20),
+                max_depth=request_data.get("max_depth", 2),
+                timeout=request_data.get("timeout", settings.default_timeout),
+                max_size_mb=request_data.get("max_size_mb", settings.capture_max_size_mb),
+                archive_name=archive_name,
+                progress_cb=_on_progress,
+            )
+        finally:
+            self._capture_progress.pop(job_id, None)
+
         download_url = provider.get_download_url(result.storage_key)
         return {
             "url": result.url,

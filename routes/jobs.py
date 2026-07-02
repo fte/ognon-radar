@@ -9,7 +9,7 @@ from typing import AsyncGenerator, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from core.auth import get_is_admin, require_api_key, require_client_id
+from core.auth import get_is_admin, require_api_key, require_client_id, require_client_id_sse
 from core.job_manager import job_manager, JobStatus
 from models.schemas import JobResponse, JobListResponse
 
@@ -71,7 +71,7 @@ async def get_job(
 @router.get("/jobs/{job_id}/stream")
 async def stream_job(
     job_id: str,
-    client_id: str = Depends(require_client_id),
+    client_id: str = Depends(require_client_id_sse),
     is_admin: bool = Depends(get_is_admin),
     interval: float = Query(2.0, ge=0.5, le=30, description="Poll interval in seconds"),
 ) -> StreamingResponse:
@@ -88,11 +88,12 @@ async def stream_job(
             yield f"event: error\ndata: {json.dumps({'detail': exc.detail})}\n\n"
             return
 
-        last_status = None
+        last_state = (None, None)
         while True:
             status = job["status"]
-            if status != last_status:
-                last_status = status
+            current_state = (status, job.get("progress"))
+            if current_state != last_state:
+                last_state = current_state
                 yield f"data: {json.dumps(job, default=str)}\n\n"
 
             if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
@@ -108,6 +109,25 @@ async def stream_job(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/jobs/{job_id}/stream-token", status_code=200)
+async def create_stream_token(
+    job_id: str,
+    client_id: str = Depends(require_client_id),
+    is_admin: bool = Depends(get_is_admin),
+) -> dict:
+    """
+    Mint a short-lived (60s) single-use token for SSE streaming.
+    EventSource cannot send headers, so the token is passed as ?token= in the URL.
+    """
+    from core.stream_tokens import mint
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _check_ownership(job, client_id, is_admin)
+    token = mint(client_id, job_id)
+    return {"token": token, "expires_in": 60}
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=200)
