@@ -15,11 +15,11 @@ tor:
 
 # Crawling Settings
 crawling:
-  delay: 7  # Seconds between requests
+  delay: 3  # Seconds between requests
   max_depth: 2
   max_pages: 50
   max_results: 10
-  timeout: 30  # Request timeout in seconds
+  timeout: 15  # Request timeout in seconds
   
   # Default seed URLs for crawling (well-known .onion sites)
   seed_urls:
