@@ -457,6 +457,9 @@ class JobManager(SqliteMixin):
         label = request_data.get("label")
         archive_name = f"{label}-{onion_prefix}-{job_id}" if label else f"{onion_prefix}-{job_id}"
 
+        if not tor_client.check_reachable(start_url):
+            raise RuntimeError(f"Target unreachable via Tor: {start_url}")
+
         provider = get_capture_provider()
         try:
             result = provider.capture(
