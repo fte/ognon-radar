@@ -398,12 +398,13 @@ class JobManager(SqliteMixin):
         )
 
         if include_screenshots and screenshots_dir is not None:
-            from core.screenshot import take_screenshot
-            for result in results:
-                url_hash = hashlib.sha256(result["url"].encode()).hexdigest()[:16]
-                output_path = screenshots_dir / f"{url_hash}.png"
-                if take_screenshot(result["url"], output_path):
-                    result["screenshot_path"] = f"/api/v1/jobs/{job_id}/screenshots/{url_hash}.png"
+            from core.screenshot import ScreenshotSession
+            with ScreenshotSession() as session:
+                for result in results:
+                    url_hash = hashlib.sha256(result["url"].encode()).hexdigest()[:16]
+                    output_path = screenshots_dir / f"{url_hash}.png"
+                    if session.take(result["url"], output_path):
+                        result["screenshot_path"] = f"/api/v1/jobs/{job_id}/screenshots/{url_hash}.png"
 
         duration = round(time.time() - start_time, 2)
         return {
