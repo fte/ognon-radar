@@ -1,10 +1,11 @@
 const _h = window.location.hostname;
 const API_BASE_URL = (_h === "localhost" || _h === "127.0.0.1" || _h === "")
   ? "http://localhost:8337"
-  : "http://api.dw.13h.be";
+  : `${window.location.protocol}//api.dw.13h.be`;
 const CLIENT_ID_KEY = "ognon-client-id";
+const PLACEHOLDER_SRC = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='60'%3E%3Crect width='84' height='60' fill='%23222'/%3E%3Ctext x='42' y='34' font-size='9' font-family='sans-serif' fill='%23555' text-anchor='middle'%3Eno image%3C/text%3E%3C/svg%3E`;
 const API_KEY_KEY = "ognon-api-key";
-const POLL_DELAY_MS = 1000;
+const POLL_DELAY_MS = 3000;
 
 let clientId = localStorage.getItem(CLIENT_ID_KEY) || generateClientId();
 localStorage.setItem(CLIENT_ID_KEY, clientId);
@@ -77,6 +78,14 @@ const endpoints = [
     mode: "example",
   },
   {
+    key: "screenshot",
+    method: "POST",
+    path: "/api/v1/screenshots",
+    title: "Lancer un screenshot",
+    description: "Capture une vignette via Playwright + Tor (job ognss-).",
+    mode: "example",
+  },
+  {
     key: "capture",
     method: "POST",
     path: "/api/v1/capture",
@@ -108,7 +117,6 @@ const healthStatus = document.querySelector("#health-status");
 const endpointList = document.querySelector("#endpoint-list");
 const statusOutput = document.querySelector("#status");
 const jobMeter = document.querySelector("#job-meter");
-const clientIdEl = document.querySelector("#client-id");
 const clientIdFull = document.querySelector("#client-id-full");
 const apiKeyStatus = document.querySelector("#api-key-status");
 const apiKeyDisplay = document.querySelector("#api-key-display");
@@ -125,11 +133,12 @@ const pollLog = document.querySelector("#poll-log");
 
 let activePoll = null;
 let pollCount = 0;
+let screenshotsEnabled = false;
 const capturePolls = new Map(); // capture_job_id → timeout handle
+const screenshotPolls = new Map(); // screenshot_job_id → interval handle
 
 renderEndpoints();
 checkHealth();
-renderClientId();
 renderCredentials();
 
 document.querySelector("#copy-client-id").addEventListener("click", () => {
@@ -173,6 +182,9 @@ form.addEventListener("submit", async (event) => {
   payload.max_depth = Number(payload.max_depth);
   payload.max_pages = Number(payload.max_pages);
   payload.timeout = 30;
+  // Screenshots are triggered client-side after results arrive, not server-side
+  screenshotsEnabled = document.getElementById("include-screenshots").checked;
+  delete payload.include_screenshots;
 
   resetScenario();
   setBusy(true);
@@ -348,11 +360,6 @@ function getClientHeaders() {
   return { "X-Client-ID": clientId };
 }
 
-function renderClientId() {
-  clientIdEl.textContent = clientId;
-  clientIdEl.title = "Conserve en localStorage — reinitialiser pour changer";
-}
-
 function renderCredentials() {
   clientIdFull.textContent = clientId;
 
@@ -403,6 +410,8 @@ function resetScenario() {
   }
   capturePolls.forEach((es) => { if (es && typeof es.close === "function") es.close(); });
   capturePolls.clear();
+  screenshotPolls.forEach((handle) => window.clearInterval(handle));
+  screenshotPolls.clear();
 
   jobId.textContent = "-";
   jobStatus.textContent = "-";
@@ -416,7 +425,7 @@ function resetScenario() {
 
 function updateJob(job) {
   const id = job.job_id || job.id || "";
-  jobId.textContent = id ? shortId(id) : "-";
+  jobId.textContent = id || "-";
   jobId.title = id;
   jobStatus.textContent = statusLabel(job.status);
   jobStarted.textContent = formatDate(job.started_at || job.created_at);
@@ -442,7 +451,7 @@ function addPollLog(method, path, state, detail) {
   row.append(timestamp, route, status);
   pollLog.prepend(row);
 
-  while (pollLog.children.length > 8) {
+  while (pollLog.children.length > 20) {
     pollLog.lastElementChild.remove();
   }
 }
@@ -499,14 +508,23 @@ function renderResults(result) {
   const duration = result?.duration_seconds ? `${result.duration_seconds.toFixed(1)} s` : "-";
 
   summary.textContent = `${total} resultat(s), ${pages} page(s) lue(s), duree ${duration}.`;
-  results.replaceChildren(...items.map(renderResult));
+
+  const thumbMap = new Map(); // url → <img> element
+  results.replaceChildren(...items.map(item => renderResult(item, thumbMap)));
 
   if (items.length === 0) {
     summary.textContent = "Job termine, aucun resultat trouve.";
+    return;
+  }
+
+  if (screenshotsEnabled) {
+    for (const [url, imgEl] of thumbMap) {
+      submitAndPollScreenshot(url, imgEl);
+    }
   }
 }
 
-function renderResult(item) {
+function renderResult(item, thumbMap) {
   const row = document.createElement("li");
   const article = document.createElement("article");
   const title = document.createElement("h3");
@@ -531,6 +549,19 @@ function renderResult(item) {
   captureStatus.className = "capture-status";
   captureStatus.value = "";
   captureBar.className = "capture-bar";
+
+  if (screenshotsEnabled || item.screenshot_path) {
+    const thumb = document.createElement("img");
+    thumb.className = "result-thumb result-thumb--pending";
+    thumb.alt = "no image";
+    thumb.src = PLACEHOLDER_SRC;
+    if (item.screenshot_path) {
+      loadAuthenticatedImage(thumb, item.screenshot_path);
+    }
+    article.classList.add("has-thumb");
+    article.append(thumb);
+    if (thumbMap) thumbMap.set(item.url, thumb);
+  }
   captureBar.append(captureBtn, captureStatus);
 
   captureBtn.addEventListener("click", () => startCapture(item.url, captureBtn, captureStatus));
@@ -538,6 +569,87 @@ function renderResult(item) {
   article.append(title, snippet, footer, captureBar);
   row.append(article);
   return row;
+}
+
+async function loadAuthenticatedImage(imgEl, apiPath) {
+  try {
+    const resp = await fetch(`${API_BASE_URL}${apiPath}`, { headers: getClientHeaders() });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    imgEl.src = URL.createObjectURL(blob);
+    imgEl.classList.remove("result-thumb--pending");
+    imgEl.addEventListener("click", () => openScreenshotDialog(imgEl.src));
+  } catch {
+    imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
+  }
+}
+
+function openScreenshotDialog(src) {
+  let dialog = document.getElementById("screenshot-dialog");
+  if (!dialog) {
+    dialog = document.createElement("dialog");
+    dialog.id = "screenshot-dialog";
+    dialog.className = "screenshot-dialog";
+    const img = document.createElement("img");
+    dialog.append(img);
+    dialog.addEventListener("click", (e) => {
+      if (e.target === dialog) dialog.close();
+    });
+    document.body.append(dialog);
+  }
+  dialog.querySelector("img").src = src;
+  dialog.showModal();
+}
+
+async function submitAndPollScreenshot(url, imgEl) {
+  try {
+    const resp = await fetch(`${API_BASE_URL}/api/v1/screenshots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getClientHeaders() },
+      body: JSON.stringify({ start_url: url }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      addPollLog("POST", "/api/v1/screenshots", `${resp.status}`, url.slice(0, 30));
+      return;
+    }
+    const { job_id } = await resp.json();
+    addPollLog("POST", "/api/v1/screenshots", "queued", job_id);
+
+    let attempts = 0;
+    const MAX_ATTEMPTS = 90; // 3 min max
+    const handle = window.setInterval(async () => {
+      attempts += 1;
+      const stopPolling = (failed) => {
+        window.clearInterval(handle);
+        screenshotPolls.delete(job_id);
+        if (failed) imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
+      };
+      if (attempts > MAX_ATTEMPTS) { stopPolling(true); return; }
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(job_id)}`, {
+          headers: getClientHeaders(),
+        });
+        if (!r.ok) { stopPolling(true); return; }
+        const job = await r.json();
+
+        if (job.status === "completed") {
+          if (job.result?.download_url) {
+            stopPolling(false);
+            loadAuthenticatedImage(imgEl, job.result.download_url);
+            addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, "completed", "screenshot ok");
+          } else {
+            stopPolling(true);
+            addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, "completed", "no image");
+          }
+        } else if (job.status === "failed" || job.status === "cancelled") {
+          stopPolling(true);
+          addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, job.status, job.error || "screenshot failed");
+        }
+      } catch { /* réseau, on réessaie au prochain tick */ }
+    }, 2000);
+    screenshotPolls.set(job_id, handle);
+  } catch { /* soumission échouée, placeholder reste */ }
 }
 
 async function startCapture(url, btn, statusEl) {

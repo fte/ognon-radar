@@ -8,7 +8,7 @@ import secrets
 import time
 from typing import Dict, Optional, Tuple
 
-_TTL = 60  # seconds — enough to open the EventSource after receiving the token
+_TTL = 600  # seconds — covers the full duration of long capture/screenshot jobs
 
 # {token: (client_id, job_id, expires_at)}
 _store: Dict[str, Tuple[str, str, float]] = {}
@@ -30,8 +30,7 @@ def redeem(token: str, job_id: str) -> Optional[str]:
     if time.monotonic() > expires_at or stored_job_id != job_id:
         _store.pop(token, None)
         return None
-    # Single-use: remove after redemption
-    _store.pop(token, None)
+    # Reusable within TTL — EventSource reconnects reuse the same token
     return stored_client_id
 
 

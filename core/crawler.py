@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote as url_quote
 from datetime import datetime, timezone
@@ -414,7 +415,19 @@ class OnionCrawler:
                 if serp_parser:
                     # On a search engine page: extract SERP entries directly
                     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                    for entry in serp_parser(soup):
+                    entries = serp_parser(soup)
+                    # Filter out unreachable .onion sites in parallel before surfacing results
+                    with ThreadPoolExecutor(max_workers=5) as pool:
+                        reachable = list(pool.map(
+                            lambda e: self.tor_client.check_reachable(e['url']),
+                            entries,
+                        ))
+                    skipped = sum(1 for r in reachable if not r)
+                    if skipped:
+                        logger.info(f"SERP: skipped {skipped}/{len(entries)} unreachable results from {current_url}")
+                    for entry, is_up in zip(entries, reachable):
+                        if not is_up:
+                            continue
                         results.append({
                             'url': entry['url'],
                             'title': entry['title'],

@@ -2,13 +2,12 @@
 services:
   # Tor SOCKS5 proxy container
   tor:
-    image: dperson/torproxy:latest
+    image: dockurr/tor:latest
     container_name: darkweb-tor
     restart: unless-stopped
+    command: ["--SocksPort", "0.0.0.0:9050", "--MaxCircuitDirtiness", "60"]
     ports:
       - "9050:9050"  # SOCKS5 proxy
-    environment:
-      - TOR_MaxCircuitDirtiness=60
     networks:
       - darkweb-net
     healthcheck:

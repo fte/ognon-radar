@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
-from core.auth import generate_job_id
+from core.auth import generate_job_id, generate_search_job_id, generate_capture_job_id, generate_screenshot_job_id
 from core.db_mixin import SqliteMixin
 from core.tor_client import tor_client
 from core.crawler import OnionCrawler, resolve_search_url
@@ -59,6 +59,7 @@ class JobManager(SqliteMixin):
         conn.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
+                type TEXT NOT NULL DEFAULT 'search',
                 client_id TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'queued',
                 request TEXT NOT NULL,
@@ -69,9 +70,18 @@ class JobManager(SqliteMixin):
                 completed_at TEXT
             )
         """)
+        # Migrate existing DBs that lack the type column
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN type TEXT NOT NULL DEFAULT 'search'")
+        except Exception:
+            pass  # column already exists
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_jobs_client_status
             ON jobs(client_id, status)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_type
+            ON jobs(type)
         """)
         conn.commit()
 
@@ -126,14 +136,14 @@ class JobManager(SqliteMixin):
         Returns:
             job_id (UUID string)
         """
-        job_id = generate_job_id()
+        job_id = generate_search_job_id()
         now = datetime.now(timezone.utc).isoformat()
 
         conn = self._get_conn()
         conn.execute(
-            """INSERT INTO jobs (id, client_id, status, request, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (job_id, client_id, JobStatus.QUEUED, json.dumps(request_data), now),
+            """INSERT INTO jobs (id, type, client_id, status, request, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (job_id, "search", client_id, JobStatus.QUEUED, json.dumps(request_data), now),
         )
         conn.commit()
 
@@ -156,6 +166,7 @@ class JobManager(SqliteMixin):
         self,
         client_id: Optional[str] = None,
         status: Optional[str] = None,
+        job_type: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> Tuple[List[Dict[str, Any]], int]:
@@ -169,6 +180,9 @@ class JobManager(SqliteMixin):
         if status is not None:
             where += " AND status = ?"
             params.append(status)
+        if job_type is not None:
+            where += " AND type = ?"
+            params.append(job_type)
 
         conn = self._get_conn()
         total = conn.execute(f"SELECT COUNT(*) FROM jobs {where}", params).fetchone()[0]
@@ -177,6 +191,19 @@ class JobManager(SqliteMixin):
             params + [limit, offset],
         ).fetchall()
         return [self._row_to_dict(row) for row in rows], total
+
+    def get_job_by_storage_key(self, storage_key: str, job_type: str) -> Optional[Dict[str, Any]]:
+        """Find a completed job by its result.storage_key. Returns None if not found."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE type = ? AND status = ? AND result LIKE ?",
+            (job_type, JobStatus.COMPLETED, f'%"{storage_key}"%'),
+        ).fetchall()
+        for row in rows:
+            d = self._row_to_dict(row)
+            if d.get("result", {}).get("storage_key") == storage_key:
+                return d
+        return None
 
     def cancel_job(self, job_id: str) -> bool:
         """
@@ -228,7 +255,7 @@ class JobManager(SqliteMixin):
 
     def submit_capture_job(self, request_data: dict, client_id: str = "") -> str:
         """Enqueue a new capture job. Returns job_id."""
-        job_id = generate_job_id()
+        job_id = generate_capture_job_id()
         now = datetime.now(timezone.utc).isoformat()
         request_data = {
             **request_data,
@@ -240,13 +267,33 @@ class JobManager(SqliteMixin):
         }
         conn = self._get_conn()
         conn.execute(
-            """INSERT INTO jobs (id, client_id, status, request, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (job_id, client_id, JobStatus.QUEUED, json.dumps(request_data), now),
+            """INSERT INTO jobs (id, type, client_id, status, request, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (job_id, "capture", client_id, JobStatus.QUEUED, json.dumps(request_data), now),
         )
         conn.commit()
         self._submit_to_pool(job_id)
         logger.info(f"Capture job {job_id} queued for client '{client_id}'")
+        return job_id
+
+    def submit_screenshot_job(self, request_data: dict, client_id: str = "") -> str:
+        """Enqueue a new screenshot job. Returns job_id."""
+        job_id = generate_screenshot_job_id()
+        now = datetime.now(timezone.utc).isoformat()
+        request_data = {
+            **request_data,
+            "_job_type": "screenshot",
+            "timeout": min(max(request_data.get("timeout", settings.default_timeout), 10), 120),
+        }
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO jobs (id, type, client_id, status, request, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (job_id, "screenshot", client_id, JobStatus.QUEUED, json.dumps(request_data), now),
+        )
+        conn.commit()
+        self._submit_to_pool(job_id)
+        logger.info(f"Screenshot job {job_id} queued for client '{client_id}'")
         return job_id
 
     # ── Internal ────────────────────────────────────────────────────
@@ -281,8 +328,11 @@ class JobManager(SqliteMixin):
         start_time = time.time()
 
         try:
-            if request_data.get("_job_type") == "capture":
+            job_type = request_data.get("_job_type")
+            if job_type == "capture":
                 result_payload = self._run_capture(job_id, request_data)
+            elif job_type == "screenshot":
+                result_payload = self._run_screenshot(job_id, request_data)
             else:
                 result_payload = self._run_search(job_id, request_data, start_time)
 
@@ -322,11 +372,21 @@ class JobManager(SqliteMixin):
             )
 
     def _run_search(self, job_id: str, request_data: dict, start_time: float) -> dict:
+        import hashlib
+        from pathlib import Path
+
         term = request_data["term"]
         start_url = request_data["start_url"]
+        include_screenshots = request_data.get("include_screenshots", False)
         actual_url = resolve_search_url(start_url, term, tor_client)
         if actual_url != start_url:
             logger.info(f"Job {job_id}: search engine detected, crawling {actual_url}")
+
+        screenshots_dir: Optional[Path] = None
+        if include_screenshots:
+            screenshots_dir = Path(settings.capture_output_dir) / "screenshots" / job_id
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+
         crawler = OnionCrawler(tor_client)
         results, total_crawled = crawler.crawl_and_search(
             start_url=actual_url,
@@ -336,6 +396,15 @@ class JobManager(SqliteMixin):
             max_results=request_data.get("max_results", settings.default_max_results),
             timeout=request_data.get("timeout", settings.default_timeout),
         )
+
+        if include_screenshots and screenshots_dir is not None:
+            from core.screenshot import take_screenshot
+            for result in results:
+                url_hash = hashlib.sha256(result["url"].encode()).hexdigest()[:16]
+                output_path = screenshots_dir / f"{url_hash}.png"
+                if take_screenshot(result["url"], output_path):
+                    result["screenshot_path"] = f"/api/v1/jobs/{job_id}/screenshots/{url_hash}.png"
+
         duration = round(time.time() - start_time, 2)
         return {
             "term": term,
@@ -345,6 +414,32 @@ class JobManager(SqliteMixin):
             "duration_seconds": duration,
             "tor_connected": True,
             "start_url": actual_url,
+        }
+
+    def _run_screenshot(self, job_id: str, request_data: dict) -> dict:
+        from pathlib import Path
+        from urllib.parse import urlparse
+        from core.screenshot import take_screenshot
+
+        start_url = request_data["start_url"]
+        onion_prefix = urlparse(start_url).hostname.replace(".onion", "")[:10]
+        storage_key = f"{onion_prefix}-{job_id}"
+
+        screenshots_dir = Path(settings.capture_output_dir) / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        output_path = screenshots_dir / f"{storage_key}.png"
+
+        timeout_ms = request_data.get("timeout", settings.default_timeout) * 1000
+        if not take_screenshot(start_url, output_path, timeout_ms=timeout_ms):
+            raise RuntimeError(f"Screenshot failed for {start_url}")
+
+        size_bytes = output_path.stat().st_size
+        download_url = f"/api/v1/screenshots/{storage_key}/download"
+        return {
+            "url": start_url,
+            "storage_key": storage_key,
+            "download_url": download_url,
+            "size_bytes": size_bytes,
         }
 
     def _run_capture(self, job_id: str, request_data: dict) -> dict:

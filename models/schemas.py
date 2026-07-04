@@ -2,11 +2,18 @@
 Pydantic schemas for request/response validation.
 """
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from core.constants import ONION_URL_REGEX
+
+
+class JobType(str, Enum):
+    SEARCH = "search"
+    CAPTURE = "capture"
+    SCREENSHOT = "screenshot"
 
 
 def _validate_onion_url(v: str) -> str:
@@ -66,7 +73,11 @@ class SearchRequest(BaseModel):
         le=120,
         description="Request timeout in seconds"
     )
-    
+    include_screenshots: bool = Field(
+        False,
+        description="Capture a screenshot for each crawled page (slower)"
+    )
+
     @field_validator('start_url')
     @classmethod
     def validate_onion_url(cls, v: Optional[str]) -> Optional[str]:
@@ -83,6 +94,7 @@ class SearchResult(BaseModel):
     seed: str = Field(..., description="Search engine or seed URL that led to this result")
     depth: int = Field(..., description="Crawl depth from the seed URL")
     term_count: int = Field(..., description="Number of times the search term appeared")
+    screenshot_path: Optional[str] = Field(None, description="Relative URL to screenshot PNG, if captured")
 
 
 class SearchResultsPayload(BaseModel):
@@ -122,10 +134,11 @@ class JobResponse(BaseModel):
     """Full job detail returned by GET /jobs/{id}."""
 
     id: str = Field(...)
+    type: Optional[JobType] = Field(None, description="Job type: search, capture, or screenshot")
     client_id: str = Field("", description="Client identifier from X-Client-ID header")
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = Field(...)
     request: Dict[str, Any] = Field(..., description="Original search request parameters")
-    result: Optional[SearchResultsPayload] = Field(None, description="Search results (when completed)")
+    result: Optional[Dict[str, Any]] = Field(None, description="Job result payload (when completed)")
     progress: Optional[Dict[str, Any]] = Field(None, description="Capture progress while running: {pages, assets, size_bytes}")
     error: Optional[str] = Field(None, description="Error message (when failed)")
     created_at: str = Field(..., description="ISO 8601 creation timestamp")
@@ -176,6 +189,26 @@ class CaptureResultPayload(BaseModel):
     size_bytes: int
     storage_key: str
     download_url: str
+
+
+# ── Screenshot models ────────────────────────────────────────────────
+
+
+class ScreenshotRequest(BaseModel):
+    start_url: str = Field(..., description="Root .onion URL to screenshot")
+    timeout: int = Field(30, ge=10, le=120)
+
+    @field_validator("start_url")
+    @classmethod
+    def validate_onion_url(cls, v: str) -> str:
+        return _validate_onion_url(v)
+
+
+class ScreenshotResultPayload(BaseModel):
+    url: str
+    storage_key: str
+    download_url: str
+    size_bytes: int
 
 
 # ── Webhook models ──────────────────────────────────────────────────

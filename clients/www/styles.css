@@ -1,16 +1,16 @@
 :root {
-  color-scheme: light;
-  --background: #f4f6f3;
-  --surface: #ffffff;
-  --surface-soft: #f9faf7;
-  --text: #1d2428;
-  --muted: #647178;
-  --line: #d9dfd7;
-  --accent: #1f7a68;
-  --accent-strong: #15594d;
-  --amber: #936812;
-  --red: #a93c32;
-  --blue: #2f5f91;
+  color-scheme: dark;
+  --background: #16121f;
+  --surface: #211a2e;
+  --surface-soft: #281f38;
+  --text: #e2d9f3;
+  --muted: #9080aa;
+  --line: #3b2f54;
+  --accent: #a87fd4;
+  --accent-strong: #c9aaee;
+  --amber: #c9955a;
+  --red: #c47280;
+  --blue: #80a8d8;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -21,7 +21,7 @@
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, #eef3ed 0, var(--background) 260px),
+    linear-gradient(180deg, #1d1430 0, var(--background) 260px),
     var(--background);
   color: var(--text);
   line-height: 1.5;
@@ -120,10 +120,25 @@ section {
   width: min(1180px, calc(100% - 32px));
   margin-inline: auto;
   padding-bottom: 42px;
+  --surface: #1e1710;
+  --surface-soft: #261d12;
+  --line: #3d2c1a;
+  --muted: #8a7060;
+  --accent-strong: #c4aa80;
+  --blue: #a0b8c8;
 }
 
 .scenario-footer .endpoint-panel {
   border-radius: 8px;
+}
+
+.scenario-footer .method {
+  background: #3d2c18;
+  color: var(--accent-strong);
+}
+
+.scenario-footer .endpoint-list code {
+  color: var(--blue);
 }
 
 .sablier {
@@ -138,7 +153,6 @@ section {
 }
 
 #health-status,
-#client-id,
 #status {
   display: block;
   min-height: 44px;
@@ -154,11 +168,6 @@ section {
   flex-direction: column;
   gap: 8px;
   align-self: end;
-}
-
-#client-id {
-  font-family: monospace;
-  font-size: 0.85em;
 }
 
 output[data-state="running"] {
@@ -236,7 +245,7 @@ output[data-state="cancelled"] {
   width: 62px;
   height: 30px;
   border-radius: 6px;
-  background: #e6ece7;
+  background: #332547;
   color: var(--accent-strong);
   font-size: .72rem;
   font-weight: 850;
@@ -299,7 +308,7 @@ button {
 
 input {
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface-soft);
   color: var(--text);
   padding: 10px 12px;
 }
@@ -337,7 +346,7 @@ button:disabled {
   margin-bottom: 12px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e7ece8;
+  background: #2e2440;
 }
 
 .job-meter span {
@@ -515,6 +524,80 @@ article footer {
   color: var(--accent-strong);
 }
 
+/* Screenshot thumbnail */
+article.has-thumb {
+  grid-template-columns: 84px 1fr;
+  align-items: start;
+  column-gap: 12px;
+}
+
+.result-thumb {
+  width: 84px;
+  height: 60px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: zoom-in;
+  display: block;
+  grid-row: 1 / -1;
+}
+
+.result-thumb--pending {
+  cursor: default;
+  background-color: #2a2040;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    rgba(255,255,255,.04) 4px,
+    rgba(255,255,255,.04) 8px
+  );
+}
+
+.result-thumb--failed {
+  cursor: default;
+  background-color: #2a2040;
+  opacity: .4;
+}
+
+/* Lightbox dialog */
+.screenshot-dialog {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 8px;
+  max-width: min(90vw, 960px);
+  border-radius: 4px;
+}
+
+.screenshot-dialog img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(90vh - 20px);
+}
+
+.screenshot-dialog::backdrop {
+  background: rgba(0, 0, 0, .75);
+}
+
+/* Checkbox label inline in form */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .9rem;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.muted-note {
+  color: var(--muted);
+  font-size: .8rem;
+}
+
 .credentials-panel {
   grid-column: 1 / -1;
 }
@@ -594,7 +677,7 @@ article footer {
   display: inline-block;
   padding: 1px 6px;
   border-radius: 4px;
-  background: #e6ece7;
+  background: #332547;
   color: var(--accent-strong);
   font-size: .72rem;
   font-weight: 800;

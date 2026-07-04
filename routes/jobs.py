@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from core.auth import get_is_admin, require_api_key, require_client_id, require_client_id_sse
 from core.job_manager import job_manager, JobStatus
-from models.schemas import JobResponse, JobListResponse
+from models.schemas import JobResponse, JobListResponse, JobType
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ async def list_jobs(
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),
     status: Optional[JobStatus] = Query(None, description="Filter by status"),
+    type: Optional[JobType] = Query(None, description="Filter by job type: search, capture, screenshot"),
     limit: int = Query(20, ge=1, le=100, description="Max jobs to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ) -> JobListResponse:
@@ -36,6 +37,7 @@ async def list_jobs(
     jobs, total = job_manager.list_jobs(
         client_id=effective_client_id,
         status=status.value if status else None,
+        job_type=type.value if type else None,
         limit=limit,
         offset=offset,
     )

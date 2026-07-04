@@ -16,7 +16,6 @@
       </div>
       <div class="header-status">
         <output id="health-status" aria-live="polite">Verification API...</output>
-        <output id="client-id" aria-live="polite" title="Identifiant client conserve en localStorage">-</output>
         <output id="api-key-status" aria-live="polite">Pas de cle API</output>
       </div>
     </header>
@@ -81,7 +80,7 @@
 
             <label>
               Resultats max
-              <input id="max-results" name="max_results" type="number" min="1" max="100" value="10">
+              <input id="max-results" name="max_results" type="number" min="1" max="100" value="5">
             </label>
 
             <label>
@@ -91,9 +90,14 @@
 
             <label>
               Pages max
-              <input id="max-pages" name="max_pages" type="number" min="1" max="200" value="50">
+              <input id="max-pages" name="max_pages" type="number" min="1" max="200" value="30">
             </label>
           </fieldset>
+
+          <label class="checkbox-label">
+            <input type="checkbox" id="include-screenshots" name="include_screenshots" checked>
+            Inclure screenshots <span class="muted-note">(job par page)</span>
+          </label>
 
           <button type="submit">
             <span aria-hidden="true">></span>

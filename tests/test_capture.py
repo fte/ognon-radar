@@ -608,7 +608,7 @@ class TestCLICaptureSubmitsJob:
         assert resp.status_code == 202
         body = resp.json()
         assert "job_id" in body
-        assert body["job_id"].startswith("ognj-")
+        assert body["job_id"].startswith("ognc-")
         assert body["status"] == "queued"
 
     def test_invalid_url_rejected(self, tmp_path, monkeypatch):

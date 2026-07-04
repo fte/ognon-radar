@@ -180,6 +180,116 @@ class TestOnionCrawler:
         assert len(results) <= 2
 
 
+# ── TorClient.check_reachable ─────────────────────────────────────────
+
+
+class TestTorClientCheckReachable:
+    _ONION = "http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+
+    def _make_client(self):
+        from core.tor_client import TorClient
+        client = TorClient.__new__(TorClient)
+        client.proxy_url = "socks5h://127.0.0.1:9050"
+        client.session = MagicMock()
+        return client
+
+    def test_returns_true_on_any_http_response(self):
+        client = self._make_client()
+        client.session.get.return_value = MagicMock(status_code=200)
+        assert client.check_reachable(self._ONION) is True
+
+    def test_returns_true_on_404(self):
+        client = self._make_client()
+        client.session.get.return_value = MagicMock(status_code=404)
+        assert client.check_reachable(self._ONION) is True
+
+    def test_returns_false_on_proxy_error(self):
+        client = self._make_client()
+        client.session.get.side_effect = httpx.ProxyError("circuit failed")
+        assert client.check_reachable(self._ONION) is False
+
+    def test_returns_false_on_connect_timeout(self):
+        client = self._make_client()
+        client.session.get.side_effect = httpx.ConnectTimeout("timed out")
+        assert client.check_reachable(self._ONION) is False
+
+    def test_returns_false_on_generic_exception(self):
+        client = self._make_client()
+        client.session.get.side_effect = RuntimeError("unexpected")
+        assert client.check_reachable(self._ONION) is False
+
+
+# ── SERP reachability filtering ───────────────────────────────────────
+
+_DDG_HOST = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion"
+_VALID_ONION_A = "http://" + "a" * 56 + ".onion"
+_VALID_ONION_B = "http://" + "b" * 56 + ".onion"
+
+_DDG_SERP_HTML = f"""
+<html><body>
+  <div class="result">
+    <a class="result__a" href="/?uddg={_VALID_ONION_A}">Site A</a>
+  </div>
+  <div class="result">
+    <a class="result__a" href="/?uddg={_VALID_ONION_B}">Site B</a>
+  </div>
+</body></html>
+"""
+
+
+class TestSERPReachabilityFilter:
+    def _make_crawler_on_ddg(self, reachable_map: dict):
+        """Return a crawler whose tor_client.check_reachable follows reachable_map."""
+        from core.crawler import OnionCrawler
+        tor = MagicMock()
+
+        resp = MagicMock()
+        resp.text = _DDG_SERP_HTML
+        resp.raise_for_status = MagicMock()
+        tor.get_with_retries.return_value = resp
+
+        tor.check_reachable.side_effect = lambda url: reachable_map.get(url, False)
+        return OnionCrawler(tor), tor
+
+    def _run(self, crawler):
+        results, _ = crawler.crawl_and_search(
+            start_url=f"http://{_DDG_HOST}",
+            search_term="anything",
+            max_depth=1,
+            max_pages=5,
+            max_results=10,
+            timeout=10,
+        )
+        return results
+
+    def test_both_reachable_both_returned(self, _patch_config):
+        crawler, _ = self._make_crawler_on_ddg({
+            _VALID_ONION_A: True,
+            _VALID_ONION_B: True,
+        })
+        results = self._run(crawler)
+        urls = [r["url"] for r in results]
+        assert _VALID_ONION_A in urls
+        assert _VALID_ONION_B in urls
+
+    def test_one_unreachable_filtered_out(self, _patch_config):
+        crawler, _ = self._make_crawler_on_ddg({
+            _VALID_ONION_A: True,
+            _VALID_ONION_B: False,
+        })
+        results = self._run(crawler)
+        urls = [r["url"] for r in results]
+        assert _VALID_ONION_A in urls
+        assert _VALID_ONION_B not in urls
+
+    def test_all_unreachable_returns_empty(self, _patch_config):
+        crawler, _ = self._make_crawler_on_ddg({
+            _VALID_ONION_A: False,
+            _VALID_ONION_B: False,
+        })
+        assert self._run(crawler) == []
+
+
 # ── WebhookManager ───────────────────────────────────────────────────
 
 

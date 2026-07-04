@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from config import settings
-from routes import health, search, jobs, capture, webhooks
+from routes import health, search, jobs, capture, webhooks, screenshots
 from routes import client as client_routes
 from core.tor_client import tor_client
 from core.job_manager import job_manager
@@ -91,6 +91,7 @@ app.include_router(health.router)
 app.include_router(search.router)
 app.include_router(jobs.router)
 app.include_router(capture.router)
+app.include_router(screenshots.router)
 app.include_router(webhooks.router)
 app.include_router(client_routes.router)
 
@@ -112,7 +113,9 @@ async def root():
             "job_detail": "GET /api/v1/jobs/{job_id}",
             "health": "GET /api/v1/health",
             "capture": "POST /api/v1/capture",
-            "capture_download": "GET /api/v1/captures/{job_id}/download"
+            "capture_download": "GET /api/v1/captures/{job_id}/download",
+            "screenshot": "POST /api/v1/screenshots",
+            "screenshot_download": "GET /api/v1/screenshots/{storage_key}/download"
         }
     }
 

@@ -33,8 +33,23 @@ def generate_client_id() -> str:
 
 
 def generate_job_id() -> str:
-    """Return a memorable job ID, e.g. 'ognj-dark-raven-kZ9mXp'."""
-    return _readable_id("ognj")
+    """Kept for backward compatibility. Use typed variants below."""
+    return generate_search_job_id()
+
+
+def generate_search_job_id() -> str:
+    """Return a search job ID, e.g. 'ognse-dark-raven-kZ9mXp'."""
+    return _readable_id("ognse")
+
+
+def generate_capture_job_id() -> str:
+    """Return a capture job ID, e.g. 'ognc-swift-falcon-aB3xY9'."""
+    return _readable_id("ognc")
+
+
+def generate_screenshot_job_id() -> str:
+    """Return a screenshot job ID, e.g. 'ognss-bold-fox-xT7pQw'."""
+    return _readable_id("ognss")
 
 
 def require_api_key(x_api_key: Optional[str] = Header(None)) -> None:
