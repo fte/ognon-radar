@@ -5,7 +5,7 @@ const API_BASE_URL = (_h === "localhost" || _h === "127.0.0.1" || _h === "")
 const CLIENT_ID_KEY = "ognon-client-id";
 const PLACEHOLDER_SRC = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='60'%3E%3Crect width='84' height='60' fill='%23222'/%3E%3Ctext x='42' y='34' font-size='9' font-family='sans-serif' fill='%23555' text-anchor='middle'%3Eno image%3C/text%3E%3C/svg%3E`;
 const API_KEY_KEY = "ognon-api-key";
-const POLL_DELAY_MS = 3000;
+
 
 let clientId = localStorage.getItem(CLIENT_ID_KEY) || generateClientId();
 localStorage.setItem(CLIENT_ID_KEY, clientId);
@@ -131,8 +131,7 @@ const summary = document.querySelector("#summary");
 const results = document.querySelector("#results");
 const pollLog = document.querySelector("#poll-log");
 
-let activePoll = null;
-let pollCount = 0;
+let searchEs = null;
 let screenshotsEnabled = false;
 const capturePolls = new Map(); // capture_job_id → timeout handle
 const screenshotPolls = new Map(); // screenshot_job_id → interval handle
@@ -174,7 +173,7 @@ healthStatus.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  window.clearTimeout(activePoll);
+  if (searchEs) { searchEs.close(); searchEs = null; }
 
   const payload = Object.fromEntries(new FormData(form));
   payload.term = payload.term.trim();
@@ -205,10 +204,10 @@ form.addEventListener("submit", async (event) => {
 
     setEndpointState("search", "done");
     setEndpointState("job", "active");
-    setStatus("Job cree. Polling toutes les secondes...", "running");
+    setStatus("Job cree. En attente SSE...", "running");
     updateJob(created);
     addPollLog("POST", "/api/v1/search", created.status, created.job_id);
-    pollJob(created.job_id);
+    streamSearchJob(created.job_id);
   } catch (error) {
     failScenario(error);
   }
@@ -236,42 +235,52 @@ async function checkHealth() {
   }
 }
 
-async function pollJob(id) {
-  pollCount += 1;
-
+async function streamSearchJob(id) {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}?limit=100`, {
+    const tokenResp = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}/stream-token`, {
+      method: "POST",
       headers: getClientHeaders(),
     });
-    const job = await readJson(response);
+    const tokenData = await readJson(tokenResp);
+    if (!tokenResp.ok) throw new Error(formatApiError(tokenData, tokenResp.status));
 
-    if (!response.ok) {
-      throw new Error(formatApiError(job, response.status));
-    }
+    const url = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}/stream?interval=2&token=${encodeURIComponent(tokenData.token)}`;
+    searchEs = new EventSource(url);
 
-    updateJob(job);
-    addPollLog("GET", `/api/v1/jobs/${shortId(id)}`, job.status, `poll #${pollCount}`);
+    searchEs.onmessage = ({ data }) => {
+      let job;
+      try { job = JSON.parse(data); } catch { return; }
 
-    if (job.status === "completed") {
-      setBusy(false);
-      setEndpointState("job", "done");
-      setStatus("Job termine. Resultats charges.", "completed");
-      setMeterState("completed");
-      renderResults(job.result);
-      return;
-    }
+      updateJob(job);
+      addPollLog("SSE", `/api/v1/jobs/${shortId(id)}/stream`, job.status, "search");
 
-    if (job.status === "failed" || job.status === "cancelled") {
-      setBusy(false);
-      setEndpointState("job", "failed");
-      setStatus(job.error || `Job ${job.status}.`, job.status);
-      setMeterState("failed");
-      return;
-    }
+      if (job.status === "completed") {
+        searchEs.close(); searchEs = null;
+        setBusy(false);
+        setEndpointState("job", "done");
+        setStatus("Job termine. Resultats charges.", "completed");
+        setMeterState("completed");
+        renderResults(job.result);
+        return;
+      }
 
-    setStatus(statusLabel(job.status), "running");
-    setMeterState(job.status);
-    activePoll = window.setTimeout(() => pollJob(id), POLL_DELAY_MS);
+      if (job.status === "failed" || job.status === "cancelled") {
+        searchEs.close(); searchEs = null;
+        setBusy(false);
+        setEndpointState("job", "failed");
+        setStatus(job.error || `Job ${job.status}.`, job.status);
+        setMeterState("failed");
+        return;
+      }
+
+      setStatus(statusLabel(job.status), "running");
+      setMeterState(job.status);
+    };
+
+    searchEs.onerror = () => {
+      searchEs.close(); searchEs = null;
+      failScenario(new Error("Connexion SSE perdue"));
+    };
   } catch (error) {
     failScenario(error);
   }
@@ -402,7 +411,7 @@ async function generateClientKey() {
 }
 
 function resetScenario() {
-  pollCount = 0;
+  if (searchEs) { searchEs.close(); searchEs = null; }
   for (const endpoint of endpoints) {
     if (endpoint.key !== "health") {
       setEndpointState(endpoint.key, "idle");
