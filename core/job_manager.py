@@ -430,6 +430,9 @@ class JobManager(SqliteMixin):
         screenshots_dir.mkdir(parents=True, exist_ok=True)
         output_path = screenshots_dir / f"{storage_key}.png"
 
+        if not tor_client.check_reachable(start_url):
+            raise RuntimeError(f"Target unreachable via Tor: {start_url}")
+
         timeout_ms = request_data.get("timeout", settings.default_timeout) * 1000
         if not take_screenshot(start_url, output_path, timeout_ms=timeout_ms):
             raise RuntimeError(f"Screenshot failed for {start_url}")
