@@ -18,10 +18,12 @@ class Settings:
         Args:
             config_path: Path to YAML config file
         """
-        config_file = Path(config_path)
-        
+        config_file = Path(config_path).resolve()
+
         if not config_file.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
+
+        base_dir = config_file.parent
         
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
@@ -71,24 +73,28 @@ class Settings:
         # Onion-Location
         self.onion_location: str = config.get('onion_location', '')
 
+        def resolve_path(raw: str) -> str:
+            p = Path(raw)
+            return str(p if p.is_absolute() else base_dir / p)
+
         # Job Queue
         jobs_config = config.get('jobs', {})
         self.job_max_workers: int = jobs_config.get('max_workers', 2)
-        self.job_db_path: str = jobs_config.get('db_path', '/app/data/jobs.db')
+        self.job_db_path: str = resolve_path(jobs_config.get('db_path', 'data/jobs.db'))
 
         # Webhook
         webhook_config = config.get('webhook', {})
         self.webhook_max_attempts: int = webhook_config.get('max_attempts', 3)
         self.webhook_retry_delay: int = webhook_config.get('retry_delay', 5)
         self.webhook_timeout: float = webhook_config.get('timeout', 10)
-        self.webhook_db_path: str = webhook_config.get('db_path', '/app/data/webhooks.db')
+        self.webhook_db_path: str = resolve_path(webhook_config.get('db_path', 'data/webhooks.db'))
         self.webhook_allow_insecure_urls: bool = webhook_config.get('allow_insecure_urls', False)
 
         # Capture
         capture_config = config.get('capture', {})
         self.capture: dict = capture_config  # kept for backward compat with warc_provider
         self.capture_backend: str = capture_config.get('backend', 'warc')
-        self.capture_output_dir: str = capture_config.get('output_dir', '/app/data/captures')
+        self.capture_output_dir: str = resolve_path(capture_config.get('output_dir', 'data/captures'))
         self.capture_max_pages: int = capture_config.get('max_pages', 50)
         self.capture_max_size_mb: int = capture_config.get('max_size_mb', 500)
 

@@ -59,19 +59,19 @@ onion_location: ""  # e.g. "http://youraddress.onion"
 # Capture Settings
 capture:
   backend: warc              # warc | r2 | b2 (future providers)
-  output_dir: /app/data/captures
+  output_dir: data/captures
   max_pages: 50              # Hard server-side cap on pages per capture job
   max_size_mb: 500           # Hard server-side cap on WARC file size
 
 # Job Queue Settings
 jobs:
   max_workers: 2         # Concurrent crawl threads
-  db_path: "/app/data/jobs.db"  # SQLite job store
+  db_path: "data/jobs.db"  # SQLite job store
 
 # Webhook Settings
 webhook:
   max_attempts: 3
   retry_delay: 5         # Seconds before first retry (doubles each attempt)
   timeout: 10            # HTTP request timeout in seconds
-  db_path: "/app/data/webhooks.db"
+  db_path: "data/webhooks.db"
   allow_insecure_urls: false  # Set true in dev to allow http:// webhook URLs
