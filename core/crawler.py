@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote as url_quote
 from datetime import datetime, timezone
@@ -65,7 +66,7 @@ def extract_onion_links(base_url: str, soup: BeautifulSoup) -> Set[str]:
 # config defines *which* seeds to use; this dict defines *how* to query them.
 _SEARCH_ENGINES = {
     "juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion": "/search/?q=",      # Ahmia
-    "xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion": "/search?query=",  # Torch
+    "xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion": "/cgi-bin/omega/omega?P=",  # Torch
     "tordexpmg4xy32rfp4ovnz7zq5ujoejwq2u26uxxtkscgo5u3losmeid.onion": "/search?q=",      # TorDex
     "haystak5njsmn2hqkewecpaxetahtwhsbsa64jom2k22z5afxhnpxfid.onion": "/search?q=",      # Haystak
     "notevil2ebbr5xjww6nryjta7bycbriyi2vh7an3wcuovlznvobykmad.onion": "/search?q=",      # Not Evil
@@ -154,15 +155,14 @@ def _parse_ahmia_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
 def _parse_torch_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
     """Extract results from Torch search engine.
 
-    Torch renders results as <dt> (title link) + <dd> (snippet) pairs,
-    or as divs with class 'result'. Links point directly to .onion URLs.
+    Torch currently renders results as <tr> rows with direct .onion hrefs.
+    Falls back to the generic parser for older layouts.
     """
     entries = []
     seen_netlocs: Set[str] = set()
 
-    # Try <dt>/<dd> pattern first
-    for dt in soup.select('dt'):
-        a = dt.select_one('a[href]')
+    for tr in soup.select('tr'):
+        a = tr.select_one('a[href]')
         if not a:
             continue
         url = a.get('href', '').strip()
@@ -173,9 +173,7 @@ def _parse_torch_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
             continue
         seen_netlocs.add(netloc)
         title = a.get_text(strip=True) or "No Title"
-        dd = dt.find_next_sibling('dd')
-        snippet = dd.get_text(strip=True) if dd else ""
-        entries.append({'url': url, 'title': title, 'snippet': snippet})
+        entries.append({'url': url, 'title': title, 'snippet': ""})
 
     if entries:
         return entries
@@ -386,7 +384,8 @@ class OnionCrawler:
         max_depth: int,
         max_pages: int,
         max_results: int,
-        timeout: int
+        timeout: int,
+        progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> Tuple[List[dict], int]:
         """
         Crawl .onion sites using BFS and search for term.
@@ -417,7 +416,19 @@ class OnionCrawler:
                 if serp_parser:
                     # On a search engine page: extract SERP entries directly
                     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                    for entry in serp_parser(soup):
+                    entries = serp_parser(soup)
+                    # Filter out unreachable .onion sites in parallel before surfacing results
+                    with ThreadPoolExecutor(max_workers=5) as pool:
+                        reachable = list(pool.map(
+                            lambda e: self.tor_client.check_reachable(e['url']),
+                            entries,
+                        ))
+                    skipped = sum(1 for r in reachable if not r)
+                    if skipped:
+                        logger.info(f"SERP: skipped {skipped}/{len(entries)} unreachable results from {current_url}")
+                    for entry, is_up in zip(entries, reachable):
+                        if not is_up:
+                            continue
                         results.append({
                             'url': entry['url'],
                             'title': entry['title'],
@@ -452,6 +463,8 @@ class OnionCrawler:
                             queue.append((link, depth + 1))
 
                 logger.info(f"Crawled: {len(crawled_urls)} pages | Found: {len(results)} results")
+                if progress_cb:
+                    progress_cb(len(crawled_urls), len(results))
                 time.sleep(settings.crawl_delay)
 
         return results, len(crawled_urls)

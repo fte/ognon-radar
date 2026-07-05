@@ -37,7 +37,10 @@ class Settings:
         # Tor Configuration
         tor_config = config.get('tor', {})
         self.tor_proxy: str = tor_config.get('proxy', 'socks5h://tor:9050')
-        self.tor_check_url: str = tor_config.get('check_url', 'http://check.torproject.org/')
+        self.tor_check_url: str = tor_config.get('check_url', 'https://check.torproject.org/')
+        self.tor_control_host: str = tor_config.get('control_host', 'tor')
+        self.tor_control_port: int = tor_config.get('control_port', 9051)
+        self.tor_control_password: str = tor_config.get('control_password', 'ognon-radar-ctrl')
         
         # Crawling Configuration
         crawl_config = config.get('crawling', {})
@@ -65,6 +68,9 @@ class Settings:
         cors_config = config.get('cors', {})
         self.cors_origins: List[str] = cors_config.get('origins', ['*'])
 
+        # Onion-Location
+        self.onion_location: str = config.get('onion_location', '')
+
         # Job Queue
         jobs_config = config.get('jobs', {})
         self.job_max_workers: int = jobs_config.get('max_workers', 2)
@@ -77,6 +83,14 @@ class Settings:
         self.webhook_timeout: float = webhook_config.get('timeout', 10)
         self.webhook_db_path: str = webhook_config.get('db_path', '/app/data/webhooks.db')
         self.webhook_allow_insecure_urls: bool = webhook_config.get('allow_insecure_urls', False)
+
+        # Capture
+        capture_config = config.get('capture', {})
+        self.capture: dict = capture_config  # kept for backward compat with warc_provider
+        self.capture_backend: str = capture_config.get('backend', 'warc')
+        self.capture_output_dir: str = capture_config.get('output_dir', '/app/data/captures')
+        self.capture_max_pages: int = capture_config.get('max_pages', 50)
+        self.capture_max_size_mb: int = capture_config.get('max_size_mb', 500)
 
 
 # Global settings instance

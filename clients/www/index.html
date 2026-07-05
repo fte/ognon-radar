@@ -16,7 +16,6 @@
       </div>
       <div class="header-status">
         <output id="health-status" aria-live="polite">Verification API...</output>
-        <output id="client-id" aria-live="polite" title="Identifiant client conserve en localStorage">-</output>
         <output id="api-key-status" aria-live="polite">Pas de cle API</output>
       </div>
     </header>
@@ -54,13 +53,6 @@
           </div>
         </div>
       </section>
-      <section class="endpoint-panel" aria-labelledby="endpoints-title">
-        <div class="section-head">
-          <p class="eyebrow">Scenario</p>
-          <h2 id="endpoints-title">Endpoints</h2>
-        </div>
-        <ol id="endpoint-list" class="endpoint-list" aria-label="Parcours des endpoints"></ol>
-      </section>
 
       <section class="request-panel" aria-labelledby="request-title">
         <div class="section-head">
@@ -88,7 +80,7 @@
 
             <label>
               Resultats max
-              <input id="max-results" name="max_results" type="number" min="1" max="100" value="10">
+              <input id="max-results" name="max_results" type="number" min="1" max="100" value="5">
             </label>
 
             <label>
@@ -98,9 +90,14 @@
 
             <label>
               Pages max
-              <input id="max-pages" name="max_pages" type="number" min="1" max="200" value="50">
+              <input id="max-pages" name="max_pages" type="number" min="1" max="200" value="10">
             </label>
           </fieldset>
+
+          <label class="checkbox-label">
+            <input type="checkbox" id="include-screenshots" name="include_screenshots" checked>
+            Inclure screenshots <span class="muted-note">(job par page)</span>
+          </label>
 
           <button type="submit">
             <span aria-hidden="true">></span>
@@ -109,54 +106,66 @@
         </form>
       </section>
 
-      <section class="process-panel" aria-labelledby="process-title">
-        <div class="section-head">
-          <p class="eyebrow">Etape 2</p>
-          <h2 id="process-title">Process en cours</h2>
-        </div>
-
-        <div id="job-meter" class="job-meter" data-state="idle">
-          <span></span>
-        </div>
-
-        <output id="status" aria-live="polite">Pret.</output>
-
-        <dl id="job-details">
-          <div>
-            <dt>Job</dt>
-            <dd id="job-id">-</dd>
+      <div class="middle-col">
+        <section class="process-panel" aria-labelledby="process-title">
+          <div class="section-head">
+            <p class="eyebrow">Etape 2</p>
+            <h2 id="process-title">Process en cours</h2>
           </div>
-          <div>
-            <dt>Statut</dt>
-            <dd id="job-status">-</dd>
-          </div>
-          <div>
-            <dt>Debut</dt>
-            <dd id="job-started">-</dd>
-          </div>
-          <div>
-            <dt>Fin</dt>
-            <dd id="job-completed">-</dd>
-          </div>
-        </dl>
-      </section>
 
-      <section class="poll-panel" aria-labelledby="poll-title">
-        <div class="section-head">
-          <p class="eyebrow">Polling 1s</p>
-          <h2 id="poll-title">Journal</h2>
-        </div>
-        <ol id="poll-log" class="poll-log" aria-live="polite"></ol>
-      </section>
+          <div id="job-meter" class="job-meter" data-state="idle">
+            <span></span>
+          </div>
+
+          <output id="status" aria-live="polite">Pret.</output>
+
+          <dl id="job-details">
+            <div>
+              <dt>Job</dt>
+              <dd id="job-id">-</dd>
+            </div>
+            <div>
+              <dt>Statut</dt>
+              <dd id="job-status">-</dd>
+            </div>
+            <div>
+              <dt>Debut</dt>
+              <dd id="job-started">-</dd>
+            </div>
+            <div>
+              <dt>Fin</dt>
+              <dd id="job-completed">-</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="poll-panel" aria-labelledby="poll-title">
+          <div class="section-head">
+            <p class="eyebrow">Polling 1s</p>
+            <h2 id="poll-title">Journal</h2>
+          </div>
+          <ol id="poll-log" class="poll-log" aria-live="polite"></ol>
+        </section>
+      </div>
 
       <section class="result-panel" aria-labelledby="results-title">
         <div class="section-head">
           <p class="eyebrow">Etape 3</p>
-          <h2 id="results-title">Resultat termine</h2>
+          <h2 id="results-title">Resultat <span class="sablier" aria-hidden="true">⏳</span></h2>
         </div>
         <p id="summary">Les resultats apparaitront quand le job sera termine.</p>
         <ol id="results" class="results-list"></ol>
       </section>
     </main>
+
+    <footer class="scenario-footer">
+      <section class="endpoint-panel" aria-labelledby="endpoints-title">
+        <div class="section-head">
+          <p class="eyebrow">Scenario</p>
+          <h2 id="endpoints-title">Endpoints</h2>
+        </div>
+        <ol id="endpoint-list" class="endpoint-list" aria-label="Parcours des endpoints"></ol>
+      </section>
+    </footer>
   </body>
 </html>

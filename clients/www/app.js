@@ -1,7 +1,11 @@
-const API_BASE_URL = "http://api.dw.13h.be";
+const _h = window.location.hostname;
+const API_BASE_URL = (_h === "localhost" || _h === "127.0.0.1" || _h === "")
+  ? "http://localhost:8337"
+  : `${window.location.protocol}//api.dw.13h.be`;
 const CLIENT_ID_KEY = "ognon-client-id";
+const PLACEHOLDER_SRC = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='60'%3E%3Crect width='84' height='60' fill='%23222'/%3E%3Ctext x='42' y='34' font-size='9' font-family='sans-serif' fill='%23555' text-anchor='middle'%3Eno image%3C/text%3E%3C/svg%3E`;
 const API_KEY_KEY = "ognon-api-key";
-const POLL_DELAY_MS = 1000;
+
 
 let clientId = localStorage.getItem(CLIENT_ID_KEY) || generateClientId();
 localStorage.setItem(CLIENT_ID_KEY, clientId);
@@ -73,6 +77,38 @@ const endpoints = [
     description: "Configurer et consulter les notifications par client.",
     mode: "example",
   },
+  {
+    key: "screenshot",
+    method: "POST",
+    path: "/api/v1/screenshots",
+    title: "Lancer un screenshot",
+    description: "Capture une vignette via Playwright + Tor (job ognss-).",
+    mode: "example",
+  },
+  {
+    key: "capture",
+    method: "POST",
+    path: "/api/v1/capture",
+    title: "Lancer la capture",
+    description: "Archive le site complet en .warc.gz via le proxy Tor.",
+    mode: "live",
+  },
+  {
+    key: "capture-poll",
+    method: "GET",
+    path: "/api/v1/jobs/{capture_id}",
+    title: "Poller la capture",
+    description: "Interroge le statut du job de capture jusqu'a completion.",
+    mode: "live",
+  },
+  {
+    key: "capture-download",
+    method: "GET",
+    path: "/api/v1/captures/{capture_id}/download",
+    title: "Telecharger le WARC",
+    description: "Telechargement de l'archive une fois la capture terminee.",
+    mode: "live",
+  },
 ];
 
 const form = document.querySelector("#search-form");
@@ -81,7 +117,6 @@ const healthStatus = document.querySelector("#health-status");
 const endpointList = document.querySelector("#endpoint-list");
 const statusOutput = document.querySelector("#status");
 const jobMeter = document.querySelector("#job-meter");
-const clientIdEl = document.querySelector("#client-id");
 const clientIdFull = document.querySelector("#client-id-full");
 const apiKeyStatus = document.querySelector("#api-key-status");
 const apiKeyDisplay = document.querySelector("#api-key-display");
@@ -96,12 +131,13 @@ const summary = document.querySelector("#summary");
 const results = document.querySelector("#results");
 const pollLog = document.querySelector("#poll-log");
 
-let activePoll = null;
-let pollCount = 0;
+let searchEs = null;
+let screenshotsEnabled = false;
+const capturePolls = new Map(); // capture_job_id → timeout handle
+const screenshotPolls = new Map(); // screenshot_job_id → interval handle
 
 renderEndpoints();
 checkHealth();
-renderClientId();
 renderCredentials();
 
 document.querySelector("#copy-client-id").addEventListener("click", () => {
@@ -137,7 +173,7 @@ healthStatus.addEventListener("click", () => {
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  window.clearTimeout(activePoll);
+  if (searchEs) { searchEs.close(); searchEs = null; }
 
   const payload = Object.fromEntries(new FormData(form));
   payload.term = payload.term.trim();
@@ -145,6 +181,9 @@ form.addEventListener("submit", async (event) => {
   payload.max_depth = Number(payload.max_depth);
   payload.max_pages = Number(payload.max_pages);
   payload.timeout = 30;
+  // Screenshots are triggered client-side after results arrive, not server-side
+  screenshotsEnabled = document.getElementById("include-screenshots").checked;
+  delete payload.include_screenshots;
 
   resetScenario();
   setBusy(true);
@@ -165,10 +204,10 @@ form.addEventListener("submit", async (event) => {
 
     setEndpointState("search", "done");
     setEndpointState("job", "active");
-    setStatus("Job cree. Polling toutes les secondes...", "running");
+    setStatus("Job cree. En attente SSE...", "running");
     updateJob(created);
     addPollLog("POST", "/api/v1/search", created.status, created.job_id);
-    pollJob(created.job_id);
+    streamSearchJob(created.job_id);
   } catch (error) {
     failScenario(error);
   }
@@ -196,42 +235,56 @@ async function checkHealth() {
   }
 }
 
-async function pollJob(id) {
-  pollCount += 1;
-
+async function streamSearchJob(id) {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}?limit=100`, {
+    const tokenResp = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}/stream-token`, {
+      method: "POST",
       headers: getClientHeaders(),
     });
-    const job = await readJson(response);
+    const tokenData = await readJson(tokenResp);
+    if (!tokenResp.ok) throw new Error(formatApiError(tokenData, tokenResp.status));
 
-    if (!response.ok) {
-      throw new Error(formatApiError(job, response.status));
-    }
+    const url = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}/stream?interval=2&token=${encodeURIComponent(tokenData.token)}`;
+    searchEs = new EventSource(url);
 
-    updateJob(job);
-    addPollLog("GET", `/api/v1/jobs/${shortId(id)}`, job.status, `poll #${pollCount}`);
+    searchEs.onmessage = ({ data }) => {
+      let job;
+      try { job = JSON.parse(data); } catch { return; }
 
-    if (job.status === "completed") {
-      setBusy(false);
-      setEndpointState("job", "done");
-      setStatus("Job termine. Resultats charges.", "completed");
-      setMeterState("completed");
-      renderResults(job.result);
-      return;
-    }
+      updateJob(job);
+      const p = job.progress;
+      const progressLabel = p ? ` · ${p.pages}p ${p.results}r` : "";
+      addPollLog("SSE", `/api/v1/jobs/${shortId(id)}/stream`, job.status, `search${progressLabel}`);
 
-    if (job.status === "failed" || job.status === "cancelled") {
-      setBusy(false);
-      setEndpointState("job", "failed");
-      setStatus(job.error || `Job ${job.status}.`, job.status);
-      setMeterState("failed");
-      return;
-    }
+      if (job.status === "completed") {
+        searchEs.close(); searchEs = null;
+        setBusy(false);
+        setEndpointState("job", "done");
+        setStatus("Job termine. Resultats charges.", "completed");
+        setMeterState("completed");
+        renderResults(job.result);
+        return;
+      }
 
-    setStatus(statusLabel(job.status), "running");
-    setMeterState(job.status);
-    activePoll = window.setTimeout(() => pollJob(id), POLL_DELAY_MS);
+      if (job.status === "failed" || job.status === "cancelled") {
+        searchEs.close(); searchEs = null;
+        setBusy(false);
+        setEndpointState("job", "failed");
+        setStatus(job.error || `Job ${job.status}.`, job.status);
+        setMeterState("failed");
+        return;
+      }
+
+      const statusText = p
+        ? `${statusLabel(job.status)} — ${p.pages} page(s) crawlee(s), ${p.results} resultat(s)`
+        : statusLabel(job.status);
+      setStatus(statusText, "running");
+      setMeterState(job.status);
+    };
+
+    searchEs.onerror = () => {
+      addPollLog("SSE", `/api/v1/jobs/${shortId(id)}/stream`, "error", "reconnect...");
+    };
   } catch (error) {
     failScenario(error);
   }
@@ -320,11 +373,6 @@ function getClientHeaders() {
   return { "X-Client-ID": clientId };
 }
 
-function renderClientId() {
-  clientIdEl.textContent = clientId;
-  clientIdEl.title = "Conserve en localStorage — reinitialiser pour changer";
-}
-
 function renderCredentials() {
   clientIdFull.textContent = clientId;
 
@@ -367,12 +415,16 @@ async function generateClientKey() {
 }
 
 function resetScenario() {
-  pollCount = 0;
+  if (searchEs) { searchEs.close(); searchEs = null; }
   for (const endpoint of endpoints) {
     if (endpoint.key !== "health") {
       setEndpointState(endpoint.key, "idle");
     }
   }
+  capturePolls.forEach((es) => { if (es && typeof es.close === "function") es.close(); });
+  capturePolls.clear();
+  screenshotPolls.forEach((handle) => window.clearInterval(handle));
+  screenshotPolls.clear();
 
   jobId.textContent = "-";
   jobStatus.textContent = "-";
@@ -386,7 +438,7 @@ function resetScenario() {
 
 function updateJob(job) {
   const id = job.job_id || job.id || "";
-  jobId.textContent = id ? shortId(id) : "-";
+  jobId.textContent = id || "-";
   jobId.title = id;
   jobStatus.textContent = statusLabel(job.status);
   jobStarted.textContent = formatDate(job.started_at || job.created_at);
@@ -412,7 +464,7 @@ function addPollLog(method, path, state, detail) {
   row.append(timestamp, route, status);
   pollLog.prepend(row);
 
-  while (pollLog.children.length > 8) {
+  while (pollLog.children.length > 20) {
     pollLog.lastElementChild.remove();
   }
 }
@@ -446,26 +498,55 @@ function formatDate(value) {
 }
 
 function renderResults(result) {
+  // Capture job
+  if (result?.download_url) {
+    const url = `${API_BASE_URL}${result.download_url}`;
+    const pages = result.pages_captured ?? "-";
+    const size = result.size_bytes ? `${(result.size_bytes / 1024).toFixed(0)} Ko` : "-";
+    summary.textContent = `Archive WARC — ${pages} page(s) capturee(s), ${size}.`;
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = url;
+    a.textContent = "Telecharger l'archive .warc.gz";
+    a.download = "";
+    li.append(a);
+    results.replaceChildren(li);
+    return;
+  }
+
+  // Search job
   const items = result?.results || [];
   const total = result?.total ?? items.length;
   const pages = result?.crawled_pages ?? 0;
   const duration = result?.duration_seconds ? `${result.duration_seconds.toFixed(1)} s` : "-";
 
   summary.textContent = `${total} resultat(s), ${pages} page(s) lue(s), duree ${duration}.`;
-  results.replaceChildren(...items.map(renderResult));
+
+  const thumbMap = new Map(); // url → <img> element
+  results.replaceChildren(...items.map(item => renderResult(item, thumbMap)));
 
   if (items.length === 0) {
     summary.textContent = "Job termine, aucun resultat trouve.";
+    return;
+  }
+
+  if (screenshotsEnabled) {
+    for (const [url, imgEl] of thumbMap) {
+      submitAndPollScreenshot(url, imgEl);
+    }
   }
 }
 
-function renderResult(item) {
+function renderResult(item, thumbMap) {
   const row = document.createElement("li");
   const article = document.createElement("article");
   const title = document.createElement("h3");
   const link = document.createElement("a");
   const snippet = document.createElement("p");
   const footer = document.createElement("footer");
+  const captureBar = document.createElement("div");
+  const captureBtn = document.createElement("button");
+  const captureStatus = document.createElement("output");
 
   link.href = item.url;
   link.textContent = item.title || item.url;
@@ -475,9 +556,224 @@ function renderResult(item) {
   snippet.textContent = item.snippet || "Aucun extrait disponible.";
   footer.textContent = `Occurrences: ${item.term_count ?? "-"} - profondeur: ${item.depth ?? "-"}`;
 
-  article.append(title, snippet, footer);
+  captureBtn.type = "button";
+  captureBtn.className = "btn-capture";
+  captureBtn.textContent = "Capturer";
+  captureStatus.className = "capture-status";
+  captureStatus.value = "";
+  captureBar.className = "capture-bar";
+
+  if (screenshotsEnabled || item.screenshot_path) {
+    const thumb = document.createElement("img");
+    thumb.className = "result-thumb result-thumb--pending";
+    thumb.alt = "no image";
+    thumb.src = PLACEHOLDER_SRC;
+    if (item.screenshot_path) {
+      loadAuthenticatedImage(thumb, item.screenshot_path);
+    }
+    article.classList.add("has-thumb");
+    article.append(thumb);
+    if (thumbMap) thumbMap.set(item.url, thumb);
+  }
+  captureBar.append(captureBtn, captureStatus);
+
+  captureBtn.addEventListener("click", () => startCapture(item.url, captureBtn, captureStatus));
+
+  article.append(title, snippet, footer, captureBar);
   row.append(article);
   return row;
+}
+
+async function loadAuthenticatedImage(imgEl, apiPath) {
+  try {
+    const resp = await fetch(`${API_BASE_URL}${apiPath}`, { headers: getClientHeaders() });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    imgEl.src = URL.createObjectURL(blob);
+    imgEl.classList.remove("result-thumb--pending");
+    imgEl.addEventListener("click", () => openScreenshotDialog(imgEl.src));
+  } catch {
+    imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
+  }
+}
+
+function openScreenshotDialog(src) {
+  let dialog = document.getElementById("screenshot-dialog");
+  if (!dialog) {
+    dialog = document.createElement("dialog");
+    dialog.id = "screenshot-dialog";
+    dialog.className = "screenshot-dialog";
+    const img = document.createElement("img");
+    dialog.append(img);
+    dialog.addEventListener("click", (e) => {
+      if (e.target === dialog) dialog.close();
+    });
+    document.body.append(dialog);
+  }
+  dialog.querySelector("img").src = src;
+  dialog.showModal();
+}
+
+async function submitAndPollScreenshot(url, imgEl) {
+  try {
+    const resp = await fetch(`${API_BASE_URL}/api/v1/screenshots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getClientHeaders() },
+      body: JSON.stringify({ start_url: url }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      addPollLog("POST", "/api/v1/screenshots", `${resp.status}`, url.slice(0, 30));
+      return;
+    }
+    const { job_id } = await resp.json();
+    addPollLog("POST", "/api/v1/screenshots", "queued", job_id);
+
+    let attempts = 0;
+    const MAX_ATTEMPTS = 90; // 3 min max
+    const handle = window.setInterval(async () => {
+      attempts += 1;
+      const stopPolling = (failed) => {
+        window.clearInterval(handle);
+        screenshotPolls.delete(job_id);
+        if (failed) imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
+      };
+      if (attempts > MAX_ATTEMPTS) { stopPolling(true); return; }
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(job_id)}`, {
+          headers: getClientHeaders(),
+        });
+        if (!r.ok) { stopPolling(true); return; }
+        const job = await r.json();
+
+        if (job.status === "completed") {
+          if (job.result?.download_url) {
+            stopPolling(false);
+            loadAuthenticatedImage(imgEl, job.result.download_url);
+            addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, "completed", "screenshot ok");
+          } else {
+            stopPolling(true);
+            addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, "completed", "no image");
+          }
+        } else if (job.status === "failed" || job.status === "cancelled") {
+          stopPolling(true);
+          addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, job.status, job.error || "screenshot failed");
+        }
+      } catch { /* réseau, on réessaie au prochain tick */ }
+    }, 2000);
+    screenshotPolls.set(job_id, handle);
+  } catch { /* soumission échouée, placeholder reste */ }
+}
+
+async function startCapture(url, btn, statusEl) {
+  btn.disabled = true;
+  statusEl.value = "Envoi...";
+  statusEl.dataset.state = "running";
+  setEndpointState("capture", "active");
+  setEndpointState("capture-poll", "idle");
+  setEndpointState("capture-download", "idle");
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/v1/capture`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getClientHeaders() },
+      body: JSON.stringify({ start_url: url }),
+    });
+    const created = await readJson(response);
+    if (!response.ok) {
+      throw new Error(formatApiError(created, response.status));
+    }
+
+    setEndpointState("capture", "done");
+    setEndpointState("capture-poll", "active");
+    addPollLog("POST", "/api/v1/capture", created.status, created.job_id);
+    statusEl.value = "En attente...";
+    streamCapture(created.job_id, btn, statusEl);
+  } catch (error) {
+    setEndpointState("capture", "failed");
+    statusEl.value = error.message;
+    statusEl.dataset.state = "failed";
+    btn.disabled = false;
+  }
+}
+
+async function streamCapture(captureJobId, btn, statusEl) {
+  // Mint a short-lived token via header-authenticated POST — never put api_key in URL
+  let token;
+  try {
+    const resp = await fetch(
+      `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(captureJobId)}/stream-token`,
+      { method: "POST", headers: getClientHeaders() }
+    );
+    const data = await readJson(resp);
+    if (!resp.ok) throw new Error(formatApiError(data, resp.status));
+    token = data.token;
+  } catch (error) {
+    setEndpointState("capture-poll", "failed");
+    statusEl.value = error.message;
+    statusEl.dataset.state = "failed";
+    btn.disabled = false;
+    return;
+  }
+
+  const url = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(captureJobId)}/stream?interval=1&token=${encodeURIComponent(token)}`;
+  const es = new EventSource(url);
+  capturePolls.set(captureJobId, es);
+
+  es.onmessage = ({ data }) => {
+    let job;
+    try { job = JSON.parse(data); } catch { return; }
+
+    const progress = job.progress;
+    const progressLabel = progress
+      ? `${progress.pages} p. — ${(progress.size_bytes / 1024).toFixed(0)} Ko`
+      : "";
+    addPollLog("SSE", `/api/v1/jobs/${shortId(captureJobId)}/stream`, job.status, `capture${progressLabel ? " · " + progressLabel : ""}`);
+
+    if (job.status === "completed") {
+      es.close();
+      capturePolls.delete(captureJobId);
+      setEndpointState("capture-poll", "done");
+      setEndpointState("capture-download", "done");
+      const result = job.result || {};
+      const pages = result.pages_captured ?? "-";
+      const size = result.size_bytes ? `${(result.size_bytes / 1024).toFixed(0)} Ko` : "-";
+      statusEl.value = `${pages} page(s), ${size}`;
+      statusEl.dataset.state = "completed";
+      if (result.download_url) {
+        const a = document.createElement("a");
+        a.href = `${API_BASE_URL}${result.download_url}`;
+        a.textContent = "Telecharger .warc.gz";
+        a.download = "";
+        a.className = "capture-download-link";
+        statusEl.replaceWith(a);
+      }
+      return;
+    }
+
+    if (job.status === "failed" || job.status === "cancelled") {
+      es.close();
+      capturePolls.delete(captureJobId);
+      setEndpointState("capture-poll", "failed");
+      statusEl.value = job.error || `Capture ${job.status}`;
+      statusEl.dataset.state = "failed";
+      btn.disabled = false;
+      return;
+    }
+
+    statusEl.value = progress
+      ? `${statusLabel(job.status)} — ${progress.pages} page(s), ${(progress.size_bytes / 1024).toFixed(0)} Ko`
+      : statusLabel(job.status);
+  };
+
+  es.onerror = () => {
+    es.close();
+    capturePolls.delete(captureJobId);
+    setEndpointState("capture-poll", "failed");
+    statusEl.value = "Connexion SSE perdue";
+    statusEl.dataset.state = "failed";
+    btn.disabled = false;
+  };
 }
 
 function shortId(id) {

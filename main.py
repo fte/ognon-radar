@@ -4,14 +4,12 @@ RESTful API for searching .onion sites via Tor network.
 """
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from config import settings
-from routes import health, search
-from routes import jobs
-from routes import webhooks
+from routes import health, search, jobs, capture, webhooks, screenshots
 from routes import client as client_routes
 from core.tor_client import tor_client
 from core.job_manager import job_manager
@@ -81,10 +79,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+if settings.onion_location:
+    @app.middleware("http")
+    async def add_onion_location(request: Request, call_next) -> Response:
+        response = await call_next(request)
+        response.headers["Onion-Location"] = settings.onion_location
+        return response
+
 # Include routers
 app.include_router(health.router)
 app.include_router(search.router)
 app.include_router(jobs.router)
+app.include_router(capture.router)
+app.include_router(screenshots.router)
 app.include_router(webhooks.router)
 app.include_router(client_routes.router)
 
@@ -104,7 +111,11 @@ async def root():
             "search": "POST /api/v1/search",
             "jobs": "GET /api/v1/jobs",
             "job_detail": "GET /api/v1/jobs/{job_id}",
-            "health": "GET /api/v1/health"
+            "health": "GET /api/v1/health",
+            "capture": "POST /api/v1/capture",
+            "capture_download": "GET /api/v1/captures/{job_id}/download",
+            "screenshot": "POST /api/v1/screenshots",
+            "screenshot_download": "GET /api/v1/screenshots/{storage_key}/download"
         }
     }
 
