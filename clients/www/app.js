@@ -252,7 +252,9 @@ async function streamSearchJob(id) {
       try { job = JSON.parse(data); } catch { return; }
 
       updateJob(job);
-      addPollLog("SSE", `/api/v1/jobs/${shortId(id)}/stream`, job.status, "search");
+      const p = job.progress;
+      const progressLabel = p ? ` · ${p.pages}p ${p.results}r` : "";
+      addPollLog("SSE", `/api/v1/jobs/${shortId(id)}/stream`, job.status, `search${progressLabel}`);
 
       if (job.status === "completed") {
         searchEs.close(); searchEs = null;
@@ -273,13 +275,15 @@ async function streamSearchJob(id) {
         return;
       }
 
-      setStatus(statusLabel(job.status), "running");
+      const statusText = p
+        ? `${statusLabel(job.status)} — ${p.pages} page(s) crawlee(s), ${p.results} resultat(s)`
+        : statusLabel(job.status);
+      setStatus(statusText, "running");
       setMeterState(job.status);
     };
 
     searchEs.onerror = () => {
-      searchEs.close(); searchEs = null;
-      failScenario(new Error("Connexion SSE perdue"));
+      addPollLog("SSE", `/api/v1/jobs/${shortId(id)}/stream`, "error", "reconnect...");
     };
   } catch (error) {
     failScenario(error);

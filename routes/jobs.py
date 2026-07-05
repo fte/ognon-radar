@@ -97,6 +97,8 @@ async def stream_job(
             if current_state != last_state:
                 last_state = current_state
                 yield f"data: {json.dumps(job, default=str)}\n\n"
+            else:
+                yield ": ping\n\n"
 
             if status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
                 return

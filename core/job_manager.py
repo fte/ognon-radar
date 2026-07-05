@@ -48,6 +48,7 @@ class JobManager(SqliteMixin):
         self.max_workers = max_workers
         self._executor: Optional[ThreadPoolExecutor] = None
         self._capture_progress: Dict[str, Dict[str, int]] = {}
+        self._search_progress: Dict[str, Dict[str, int]] = {}
         self.__init_sqlite__()
         self._init_db()
 
@@ -158,8 +159,11 @@ class JobManager(SqliteMixin):
         if not row:
             return None
         d = self._row_to_dict(row)
-        if d.get("status") == JobStatus.RUNNING and job_id in self._capture_progress:
-            d["progress"] = self._capture_progress[job_id]
+        if d.get("status") == JobStatus.RUNNING:
+            if job_id in self._capture_progress:
+                d["progress"] = self._capture_progress[job_id]
+            elif job_id in self._search_progress:
+                d["progress"] = self._search_progress[job_id]
         return d
 
     def list_jobs(
@@ -387,15 +391,24 @@ class JobManager(SqliteMixin):
             screenshots_dir = Path(settings.capture_output_dir) / "screenshots" / job_id
             screenshots_dir.mkdir(parents=True, exist_ok=True)
 
+        self._search_progress[job_id] = {"pages": 0, "results": 0}
+
+        def _on_search_progress(pages: int, results_found: int) -> None:
+            self._search_progress[job_id] = {"pages": pages, "results": results_found}
+
         crawler = OnionCrawler(tor_client)
-        results, total_crawled = crawler.crawl_and_search(
-            start_url=actual_url,
-            search_term=term,
-            max_depth=request_data.get("max_depth", settings.default_max_depth),
-            max_pages=request_data.get("max_pages", settings.default_max_pages),
-            max_results=request_data.get("max_results", settings.default_max_results),
-            timeout=request_data.get("timeout", settings.default_timeout),
-        )
+        try:
+            results, total_crawled = crawler.crawl_and_search(
+                start_url=actual_url,
+                search_term=term,
+                max_depth=request_data.get("max_depth", settings.default_max_depth),
+                max_pages=request_data.get("max_pages", settings.default_max_pages),
+                max_results=request_data.get("max_results", settings.default_max_results),
+                timeout=request_data.get("timeout", settings.default_timeout),
+                progress_cb=_on_search_progress,
+            )
+        finally:
+            self._search_progress.pop(job_id, None)
 
         if include_screenshots and screenshots_dir is not None:
             from core.screenshot import ScreenshotSession

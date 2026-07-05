@@ -384,7 +384,8 @@ class OnionCrawler:
         max_depth: int,
         max_pages: int,
         max_results: int,
-        timeout: int
+        timeout: int,
+        progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> Tuple[List[dict], int]:
         """
         Crawl .onion sites using BFS and search for term.
@@ -462,6 +463,8 @@ class OnionCrawler:
                             queue.append((link, depth + 1))
 
                 logger.info(f"Crawled: {len(crawled_urls)} pages | Found: {len(results)} results")
+                if progress_cb:
+                    progress_cb(len(crawled_urls), len(results))
                 time.sleep(settings.crawl_delay)
 
         return results, len(crawled_urls)
