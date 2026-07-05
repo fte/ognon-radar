@@ -1,32 +1,34 @@
 # DarkWeb Search API - Docker Image (optimized for dev)
-FROM python:3.11-alpine
+FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install minimal system dependencies
-RUN apk add --no-cache --virtual .build-deps \
-    gcc musl-dev libffi-dev openssl-dev && \
-    apk add --no-cache curl && \
-    python -m pip install --upgrade pip && \
-    apk del .build-deps
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better layer caching
 COPY requirements.txt .
 
-# Install Python dependencies and clean cache
-RUN python -m pip install --no-cache-dir -r requirements.txt && \
-    find /usr/local/lib/python3.11/site-packages -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
-    find /usr/local/lib/python3.11/site-packages -type f -name "*.pyc" -delete && \
-    rm -rf /tmp/* /var/tmp/*
+# Install Python dependencies
+RUN python -m pip install --no-cache-dir --upgrade pip && \
+    python -m pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright Chromium browser + OS deps.
+# Fixed path so the browser is findable after we drop to a non-root user below
+# (default install path is under the current user's home, i.e. /root/... here).
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN playwright install chromium --with-deps
 
 # Copy application code
 COPY . .
 
 # Create non-root user for security
-RUN adduser -D -u 1000 apiuser && \
+RUN useradd -m -u 1000 apiuser && \
     mkdir -p /app/data && \
-    chown -R apiuser:apiuser /app
+    chown -R apiuser:apiuser /app /ms-playwright
 
 USER apiuser
 

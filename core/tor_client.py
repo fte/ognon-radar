@@ -2,6 +2,7 @@
 Tor client for SOCKS5 proxy communication.
 Handles session creation, circuit renewal, and connectivity testing.
 """
+import socket
 import time
 import logging
 from typing import Optional
@@ -36,6 +37,27 @@ class TorClient:
         )
         logger.info("Created new Tor session with SOCKS5 proxy")
         return self.session
+
+    def check_reachable(self, url: str, connect_timeout: float = 15.0) -> bool:
+        """Quick reachability probe: True if the server sends any HTTP response.
+
+        ProxyError means Tor failed to establish a circuit (service is down).
+        TimeoutException means the connect window expired — treated as unreachable.
+        Any HTTP status code (200, 403, 404 …) means the server is up.
+        """
+        if not self.session:
+            self.create_session()
+        try:
+            self.session.get(url, timeout=httpx.Timeout(5.0, connect=connect_timeout))
+            return True
+        except httpx.ProxyError:
+            logger.debug(f"Tor circuit failed for {url} — service down")
+            return False
+        except httpx.TimeoutException:
+            logger.debug(f"Connect timeout for {url} — treating as unreachable")
+            return False
+        except Exception:
+            return False
 
     def test_connection(self) -> bool:
         """Test if Tor connection is working by checking torproject.org."""
@@ -92,6 +114,27 @@ class TorClient:
 
         logger.error(f"All {retries} attempts failed for {url}")
         raise last_exception
+
+    def renew_circuit(self) -> None:
+        """Request a new Tor circuit via the control port (SIGNAL NEWNYM).
+
+        Subsequent SOCKS5 connections will use a different exit node.
+        Logs a warning on failure but never raises — jobs continue regardless.
+        """
+        try:
+            with socket.create_connection(
+                (settings.tor_control_host, settings.tor_control_port), timeout=5
+            ) as ctrl:
+                ctrl.sendall(
+                    f'AUTHENTICATE "{settings.tor_control_password}"\r\nSIGNAL NEWNYM\r\nQUIT\r\n'.encode()
+                )
+                response = ctrl.recv(1024).decode(errors="replace")
+            if "250 OK" in response:
+                logger.info("Tor circuit renewed (SIGNAL NEWNYM)")
+            else:
+                logger.warning(f"Unexpected control port response: {response!r}")
+        except Exception as e:
+            logger.warning(f"Circuit renewal failed (continuing anyway): {e}")
 
     def close(self):
         """Close the session and cleanup resources."""

@@ -21,7 +21,11 @@ class SqliteMixin:
         if not hasattr(self._local, "conn") or self._local.conn is None:
             conn = sqlite3.connect(self.db_path, timeout=10)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
+            # WAL relies on shared mmap between connections for its -shm index,
+            # which Docker Desktop's bind-mount file sharing doesn't support
+            # reliably — long-lived per-thread connections end up with a stale
+            # view of the table. DELETE mode uses plain file I/O + locking instead.
+            conn.execute("PRAGMA journal_mode=DELETE")
             conn.execute("PRAGMA busy_timeout=5000")
             with self._conn_lock:
                 self._connections.append(conn)

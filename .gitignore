@@ -65,6 +65,5 @@ crawler_output/
 output/
 
 # Runtime data (SQLite DBs, WAL files)
-data/*.db
-data/*.db-shm
-data/*.db-wal
+data/*
+ognon-jobs/*

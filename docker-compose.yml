@@ -2,17 +2,26 @@
 services:
   # Tor SOCKS5 proxy container
   tor:
-    image: dperson/torproxy:latest
+    image: dockurr/tor:latest
     container_name: darkweb-tor
     restart: unless-stopped
+    # Shell entrypoint: hash the control password at startup so Tor never runs with
+    # --CookieAuthentication 0 (any container on the network could issue SETCONF).
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      exec tor
+      --SocksPort 0.0.0.0:9050
+      --ControlPort 9051
+      --HashedControlPassword "$$(tor --hash-password "$${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}")"
+      --MaxCircuitDirtiness 60
+    environment:
+      TOR_CONTROL_PASSWORD: ${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}
     ports:
       - "9050:9050"  # SOCKS5 proxy
-    environment:
-      - TOR_MaxCircuitDirtiness=60
     networks:
       - darkweb-net
     healthcheck:
-      test: ["CMD", "curl", "--socks5", "localhost:9050", "--fail", "http://check.torproject.org/"]
+      test: ["CMD", "curl", "--socks5", "localhost:9050", "--fail", "https://check.torproject.org/"]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -30,13 +39,17 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       # Mount for development (comment out for production)
       - .:/app
-      # Job database persistence (bind mount — accessible from host for DBeaver etc.)
+      # Job database and captures persistence (bind mount — accessible from host)
       - ./ognon-jobs:/app/data
     depends_on:
       tor:
         condition: service_healthy
     networks:
       - darkweb-net
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   # Dark Crawler CLI (original script)
