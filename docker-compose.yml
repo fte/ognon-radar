@@ -46,6 +46,10 @@ services:
         condition: service_healthy
     networks:
       - darkweb-net
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   # Dark Crawler CLI (original script)
