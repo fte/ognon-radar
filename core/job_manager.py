@@ -470,16 +470,16 @@ class JobManager(SqliteMixin):
         def _on_progress(pages: int, assets: int, size_bytes: int) -> None:
             self._capture_progress[job_id] = {"pages": pages, "assets": assets, "size_bytes": size_bytes}
 
-        start_url = request_data["start_url"]
-        onion_prefix = urlparse(start_url).hostname.replace(".onion", "")[:10]
-        label = request_data.get("label")
-        archive_name = f"{label}-{onion_prefix}-{job_id}" if label else f"{onion_prefix}-{job_id}"
-
-        if not tor_client.check_reachable(start_url):
-            raise RuntimeError(f"Target unreachable via Tor: {start_url}")
-
-        provider = get_capture_provider()
         try:
+            start_url = request_data["start_url"]
+            onion_prefix = urlparse(start_url).hostname.replace(".onion", "")[:10]
+            label = request_data.get("label")
+            archive_name = f"{label}-{onion_prefix}-{job_id}" if label else f"{onion_prefix}-{job_id}"
+
+            if not tor_client.check_reachable(start_url):
+                raise RuntimeError(f"Target unreachable via Tor: {start_url}")
+
+            provider = get_capture_provider()
             result = provider.capture(
                 job_id=job_id,
                 start_url=start_url,
