@@ -2,6 +2,7 @@
 Tor client for SOCKS5 proxy communication.
 Handles session creation, circuit renewal, and connectivity testing.
 """
+import socket
 import time
 import logging
 from typing import Optional
@@ -113,6 +114,25 @@ class TorClient:
 
         logger.error(f"All {retries} attempts failed for {url}")
         raise last_exception
+
+    def renew_circuit(self) -> None:
+        """Request a new Tor circuit via the control port (SIGNAL NEWNYM).
+
+        Subsequent SOCKS5 connections will use a different exit node.
+        Logs a warning on failure but never raises — jobs continue regardless.
+        """
+        try:
+            with socket.create_connection(
+                (settings.tor_control_host, settings.tor_control_port), timeout=5
+            ) as ctrl:
+                ctrl.sendall(b"AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
+                response = ctrl.recv(1024).decode(errors="replace")
+            if "250 OK" in response:
+                logger.info("Tor circuit renewed (SIGNAL NEWNYM)")
+            else:
+                logger.warning(f"Unexpected control port response: {response!r}")
+        except Exception as e:
+            logger.warning(f"Circuit renewal failed (continuing anyway): {e}")
 
     def close(self):
         """Close the session and cleanup resources."""

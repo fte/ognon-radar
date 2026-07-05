@@ -5,7 +5,17 @@ services:
     image: dockurr/tor:latest
     container_name: darkweb-tor
     restart: unless-stopped
-    command: ["--SocksPort", "0.0.0.0:9050", "--MaxCircuitDirtiness", "60"]
+    # Shell entrypoint: hash the control password at startup so Tor never runs with
+    # --CookieAuthentication 0 (any container on the network could issue SETCONF).
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      exec tor
+      --SocksPort 0.0.0.0:9050
+      --ControlPort 9051
+      --HashedControlPassword "$$(tor --hash-password "$${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}")"
+      --MaxCircuitDirtiness 60
+    environment:
+      TOR_CONTROL_PASSWORD: ${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}
     ports:
       - "9050:9050"  # SOCKS5 proxy
     networks:

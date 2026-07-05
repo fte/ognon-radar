@@ -12,6 +12,8 @@ api:
 tor:
   proxy: "socks5h://tor:9050"
   check_url: "https://check.torproject.org/"
+  control_host: "tor"
+  control_port: 9051
 
 # Crawling Settings
 crawling:

@@ -38,6 +38,8 @@ class Settings:
         tor_config = config.get('tor', {})
         self.tor_proxy: str = tor_config.get('proxy', 'socks5h://tor:9050')
         self.tor_check_url: str = tor_config.get('check_url', 'https://check.torproject.org/')
+        self.tor_control_host: str = tor_config.get('control_host', 'tor')
+        self.tor_control_port: int = tor_config.get('control_port', 9051)
         
         # Crawling Configuration
         crawl_config = config.get('crawling', {})

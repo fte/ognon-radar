@@ -331,6 +331,8 @@ class JobManager(SqliteMixin):
         request_data = job["request"]
         start_time = time.time()
 
+        tor_client.renew_circuit()
+
         try:
             job_type = request_data.get("_job_type")
             if job_type == "capture":
