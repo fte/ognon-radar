@@ -1,7 +1,7 @@
 const _h = window.location.hostname;
 const API_BASE_URL = (_h === "localhost" || _h === "127.0.0.1" || _h === "")
   ? "http://localhost:8337"
-  : `${window.location.protocol}//api.dw.13h.be`;
+  : "https://api.dw.13h.be";
 const CLIENT_ID_KEY = "ognon-client-id";
 const PLACEHOLDER_SRC = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='60'%3E%3Crect width='84' height='60' fill='%23222'/%3E%3Ctext x='42' y='34' font-size='9' font-family='sans-serif' fill='%23555' text-anchor='middle'%3Eno image%3C/text%3E%3C/svg%3E`;
 const API_KEY_KEY = "ognon-api-key";
