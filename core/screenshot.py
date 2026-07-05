@@ -51,6 +51,7 @@ class ScreenshotSession:
             raise RuntimeError("ScreenshotSession must be used as a context manager")
         try:
             page = self._browser.new_page()
+            page.set_default_timeout(self.timeout_ms)
             try:
                 page.goto(url, timeout=self.timeout_ms, wait_until="domcontentloaded")
                 page.screenshot(path=str(output_path), full_page=False)
