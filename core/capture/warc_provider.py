@@ -7,6 +7,7 @@ Swap this provider for an R2/B2 one without changing the API layer.
 import io
 import logging
 import os
+import tempfile
 import time
 from collections import deque
 from pathlib import Path
@@ -64,63 +65,76 @@ class WARCCaptureProvider(CaptureProvider):
         size_capped = False
         job_start = time.monotonic()
 
-        with open(dest, "wb") as fh:
-            writer = WARCWriter(fh, gzip=True)
-            visited: Set[str] = set()
-            queue: deque = deque([(start_url, 0)])
+        tmp_fd, tmp_path_str = tempfile.mkstemp(
+            dir=self._output_dir, prefix=".tmp.", suffix=".warc.gz"
+        )
+        tmp_path = Path(tmp_path_str)
+        try:
+            with os.fdopen(tmp_fd, "wb") as fh:
+                writer = WARCWriter(fh, gzip=True)
+                visited: Set[str] = set()
+                queue: deque = deque([(start_url, 0)])
 
-            while queue and pages < max_pages:
-                url, depth = queue.popleft()
-                if url in visited or depth > max_depth:
-                    continue
+                while queue and pages < max_pages:
+                    url, depth = queue.popleft()
+                    if url in visited or depth > max_depth:
+                        continue
 
-                parsed = urlparse(url)
-                if any(parsed.path.startswith(p) for p in BLACKLIST_PATHS):
-                    continue
+                    parsed = urlparse(url)
+                    if any(parsed.path.startswith(p) for p in BLACKLIST_PATHS):
+                        continue
 
-                page_start = time.monotonic()
-                bytes_before = fh.tell()
-                try:
-                    response = self._tor.get_with_retries(url, timeout=timeout)
-                except Exception as exc:
-                    logger.warning(f"[{job_id}] fetch failed depth={depth} url={url}: {exc}")
-                    continue
+                    page_start = time.monotonic()
+                    bytes_before = fh.tell()
+                    try:
+                        response = self._tor.get_with_retries(url, timeout=timeout)
+                    except Exception as exc:
+                        logger.warning(f"[{job_id}] fetch failed depth={depth} url={url}: {exc}")
+                        continue
 
-                visited.add(url)
-                self._write_record(writer, url, response)
-                pages += 1
-                page_ms = int((time.monotonic() - page_start) * 1000)
-                bytes_written = fh.tell() - bytes_before
-                logger.info(f"[{job_id}] page {pages}/{max_pages} depth={depth} {page_ms}ms +{bytes_written}B — {url}")
-                if progress_cb:
-                    progress_cb(pages, assets, fh.tell())
+                    visited.add(url)
+                    self._write_record(writer, url, response)
+                    pages += 1
+                    page_ms = int((time.monotonic() - page_start) * 1000)
+                    bytes_written = fh.tell() - bytes_before
+                    logger.info(f"[{job_id}] page {pages}/{max_pages} depth={depth} {page_ms}ms +{bytes_written}B — {url}")
+                    if progress_cb:
+                        progress_cb(pages, assets, fh.tell())
 
-                if bytes_before + bytes_written >= max_bytes:
-                    logger.warning(f"[{job_id}] size limit {max_bytes // (1024*1024)} MB reached, stopping")
-                    size_capped = True
-                    break
-
-                if "text/html" in response.headers.get("Content-Type", ""):
-                    soup = BeautifulSoup(response.text, "lxml")
-                    assets, size_capped = self._capture_assets(
-                        writer, url, soup, timeout, fh, max_bytes, assets, job_id
-                    )
-                    if size_capped:
-                        logger.warning(f"[{job_id}] size limit reached during asset fetch, stopping")
+                    if bytes_before + bytes_written >= max_bytes:
+                        logger.warning(f"[{job_id}] size limit {max_bytes // (1024*1024)} MB reached, stopping")
+                        size_capped = True
                         break
 
-                    if depth < max_depth:
-                        for link in self._extract_links(url, soup):
-                            if link not in visited:
-                                queue.append((link, depth + 1))
+                    if "text/html" in response.headers.get("Content-Type", ""):
+                        soup = BeautifulSoup(response.text, "lxml")
+                        assets, size_capped = self._capture_assets(
+                            writer, url, soup, timeout, fh, max_bytes, assets, job_id
+                        )
+                        if size_capped:
+                            logger.warning(f"[{job_id}] size limit reached during asset fetch, stopping")
+                            break
 
-                time.sleep(settings.crawl_delay)
+                        if depth < max_depth:
+                            for link in self._extract_links(url, soup):
+                                if link not in visited:
+                                    queue.append((link, depth + 1))
+
+                    time.sleep(settings.crawl_delay)
+
+                fh.flush()
+                os.fsync(fh.fileno())
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
         elapsed = time.monotonic() - job_start
 
         if pages == 0:
-            dest.unlink(missing_ok=True)
+            tmp_path.unlink(missing_ok=True)
             raise RuntimeError(f"No pages could be fetched from {start_url} — archive not created")
+
+        tmp_path.rename(dest)
 
         size = dest.stat().st_size
         logger.info(
