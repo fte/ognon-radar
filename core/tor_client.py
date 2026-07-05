@@ -125,7 +125,9 @@ class TorClient:
             with socket.create_connection(
                 (settings.tor_control_host, settings.tor_control_port), timeout=5
             ) as ctrl:
-                ctrl.sendall(b"AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
+                ctrl.sendall(
+                    f'AUTHENTICATE "{settings.tor_control_password}"\r\nSIGNAL NEWNYM\r\nQUIT\r\n'.encode()
+                )
                 response = ctrl.recv(1024).decode(errors="replace")
             if "250 OK" in response:
                 logger.info("Tor circuit renewed (SIGNAL NEWNYM)")

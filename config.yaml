@@ -14,6 +14,7 @@ tor:
   check_url: "https://check.torproject.org/"
   control_host: "tor"
   control_port: 9051
+  control_password: "ognon-radar-ctrl"  # must match TOR_CONTROL_PASSWORD env var in docker-compose
 
 # Crawling Settings
 crawling:

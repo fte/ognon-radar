@@ -40,6 +40,7 @@ class Settings:
         self.tor_check_url: str = tor_config.get('check_url', 'https://check.torproject.org/')
         self.tor_control_host: str = tor_config.get('control_host', 'tor')
         self.tor_control_port: int = tor_config.get('control_port', 9051)
+        self.tor_control_password: str = tor_config.get('control_password', 'ognon-radar-ctrl')
         
         # Crawling Configuration
         crawl_config = config.get('crawling', {})
