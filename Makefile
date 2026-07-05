@@ -23,6 +23,9 @@ restart:           ## Restart API container
 ps:                ## Show running containers
 	docker-compose ps
 
+shell:             ## Open a shell inside the running API container
+	docker-compose exec api /bin/bash
+
 # ── Tests ───────────────────────────────────────────────────────────
 
 test:              ## Run tests locally (venv)
