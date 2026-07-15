@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""
+darkweb-admin — Typer CLI for admin-only job management.
+
+Talks to the DarkWeb Search API using only the admin X-API-Key (the value
+configured as security.api_key in config.yaml) — no X-Client-ID is needed,
+and results/deletes span jobs across all clients.
+
+Usage:
+    darkweb-admin jobs   [--status STATUS] [--type TYPE] [--limit N] [--offset N]
+    darkweb-admin job    JOB_ID [--offset N] [--limit N]
+    darkweb-admin cancel JOB_ID
+    darkweb-admin delete JOB_ID
+    darkweb-admin purge  [--status STATUS]
+
+The API key is read from --api-key or the DARKWEB_API_KEY environment
+variable.
+"""
+import json
+from typing import Optional
+
+import httpx
+import typer
+
+app = typer.Typer(
+    add_completion=False,
+    help="Admin CLI for the DarkWeb Search API — read/delete jobs across all clients.",
+)
+
+DEFAULT_HOST = "http://localhost:8337"
+
+HostOption = typer.Option(DEFAULT_HOST, "--host", help="API base URL.")
+ApiKeyOption = typer.Option(
+    ...,
+    "--api-key",
+    envvar="DARKWEB_API_KEY",
+    help="Admin API key, sent as X-API-Key.",
+)
+
+
+def _client(host: str, api_key: str) -> httpx.Client:
+    return httpx.Client(
+        base_url=host,
+        headers={"X-API-Key": api_key, "Accept": "application/json"},
+        timeout=30,
+    )
+
+
+def _print_and_exit(resp: httpx.Response) -> None:
+    typer.echo(f"HTTP {resp.status_code}")
+    try:
+        typer.echo(json.dumps(resp.json(), indent=2))
+    except ValueError:
+        typer.echo(resp.text)
+    if resp.status_code >= 400:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def jobs(
+    host: str = HostOption,
+    api_key: str = ApiKeyOption,
+    status: Optional[str] = typer.Option(
+        None, help="Filter by status: queued, running, completed, failed, cancelled"
+    ),
+    type: Optional[str] = typer.Option(
+        None, "--type", help="Filter by job type: search, capture, screenshot"
+    ),
+    limit: int = typer.Option(20, help="Max jobs to return"),
+    offset: int = typer.Option(0, help="Offset for pagination"),
+) -> None:
+    """List jobs across all clients."""
+    params = {"limit": limit, "offset": offset}
+    if status:
+        params["status"] = status
+    if type:
+        params["type"] = type
+    with _client(host, api_key) as c:
+        resp = c.get("/api/v1/jobs", params=params)
+    _print_and_exit(resp)
+
+
+@app.command()
+def job(
+    job_id: str,
+    host: str = HostOption,
+    api_key: str = ApiKeyOption,
+    offset: int = typer.Option(0, help="Result offset for pagination"),
+    limit: int = typer.Option(20, help="Max results to return"),
+) -> None:
+    """Get full job detail."""
+    with _client(host, api_key) as c:
+        resp = c.get(f"/api/v1/jobs/{job_id}", params={"offset": offset, "limit": limit})
+    _print_and_exit(resp)
+
+
+@app.command()
+def cancel(
+    job_id: str,
+    host: str = HostOption,
+    api_key: str = ApiKeyOption,
+) -> None:
+    """Cancel a queued job."""
+    with _client(host, api_key) as c:
+        resp = c.post(f"/api/v1/jobs/{job_id}/cancel")
+    _print_and_exit(resp)
+
+
+@app.command()
+def delete(
+    job_id: str,
+    host: str = HostOption,
+    api_key: str = ApiKeyOption,
+) -> None:
+    """Delete a completed, failed, or cancelled job."""
+    with _client(host, api_key) as c:
+        resp = c.delete(f"/api/v1/jobs/{job_id}")
+    _print_and_exit(resp)
+
+
+@app.command()
+def purge(
+    host: str = HostOption,
+    api_key: str = ApiKeyOption,
+    status: Optional[str] = typer.Option(
+        None, help="Filter by status (default: all terminal jobs)"
+    ),
+) -> None:
+    """Delete all completed/failed/cancelled jobs across all clients."""
+    params = {"status": status} if status else {}
+    with _client(host, api_key) as c:
+        resp = c.delete("/api/v1/jobs", params=params)
+    _print_and_exit(resp)
+
+
+if __name__ == "__main__":
+    app()
