@@ -7,13 +7,16 @@ services:
     restart: unless-stopped
     # Shell entrypoint: hash the control password at startup so Tor never runs with
     # --CookieAuthentication 0 (any container on the network could issue SETCONF).
-    entrypoint: ["/bin/sh", "-c"]
-    command: >-
-      exec tor
-      --SocksPort 0.0.0.0:9050
-      --ControlPort 9051
-      --HashedControlPassword "$$(tor --hash-password "$${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}")"
-      --MaxCircuitDirtiness 60
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+          exec tor
+          --RunAsDaemon 0
+          --SocksPort 0.0.0.0:9050
+          --ControlPort 9051
+          --HashedControlPassword "$$(tor --hash-password "$${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}" | grep '^16:')"
+          --MaxCircuitDirtiness 60
     environment:
       TOR_CONTROL_PASSWORD: ${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}
     ports:
@@ -21,7 +24,7 @@ services:
     networks:
       - darkweb-net
     healthcheck:
-      test: ["CMD", "curl", "--socks5", "localhost:9050", "--fail", "https://check.torproject.org/"]
+      test: ["CMD", "curl", "--socks5-hostname", "localhost:9050", "--fail", "https://check.torproject.org/"]
       interval: 60s
       timeout: 10s
       retries: 3
