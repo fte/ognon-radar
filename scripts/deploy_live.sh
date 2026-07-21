@@ -65,22 +65,28 @@ echo "[deploy] Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 
 echo "[deploy] Checking Playwright Chromium browser"
-if "$VENV_DIR/bin/python" -c "
-import pathlib, sys
-try:
-    from playwright._impl._driver import compute_driver_executable_path
-    sys.exit(0 if pathlib.Path(compute_driver_executable_path()).exists() else 1)
-except Exception:
-    sys.exit(1)
-" 2>/dev/null; then
+if "$VENV_DIR/bin/python" "$APP_DIR/scripts/check_playwright.py" --verbose 2>&1; then
     echo "[deploy] Playwright Chromium already installed (version matches), skipping"
 else
-    echo "[deploy] Playwright Chromium missing — installing (~200 MB download, 30-60s on typical connection)"
-    echo "[deploy] Installing Playwright system dependencies (requires sudo for apt-get)"
+    cat <<'INFO'
+  ┌─ Playwright Chromium is missing ──────────────────────────────────┐
+  │                                                                   │
+  │  The deploy script will now:                                      │
+  │    1. Install system libraries via sudo apt-get  (requires sudo)  │
+  │    2. Download ~200 MB of Chromium binaries    (30-60s typical)   │
+  │                                                                   │
+  │  If sudo prompts for a password, grant NOPASSWD for apt-get:      │
+  │    echo '<USER> ALL=(ALL) NOPASSWD: /usr/bin/apt-get'             │
+  │    | sudo tee /etc/sudoers.d/playwright                           │
+  │                                                                   │
+  └───────────────────────────────────────────────────────────────────┘
+INFO
+    echo "[deploy] Installing Playwright system dependencies"
     "$VENV_DIR/bin/python" -m playwright install-deps chromium || {
         rc=$?
         echo "ERROR: Failed to install Playwright system dependencies (exit code $rc)"
-        echo "  This usually requires sudo/root for apt-get. Check your NOPASSWD sudo rules."
+        echo "  This usually requires sudo/root for apt-get."
+        echo "  Check your NOPASSWD sudo rules (see info box above)."
         exit $rc
     }
     echo "[deploy] Downloading and installing Chromium browser binary"
