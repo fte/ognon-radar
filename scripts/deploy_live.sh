@@ -64,14 +64,23 @@ echo "[deploy] Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 
-echo "[deploy] Installing Playwright system dependencies (libnss3, libatk, etc.)"
-"$VENV_DIR/bin/python" -m playwright install-deps chromium
-
-echo "[deploy] Removing old Playwright browser cache to avoid version conflicts"
-rm -rf "$HOME/.cache/ms-playwright"
-
-echo "[deploy] Installing Playwright Chromium browser binary"
-"$VENV_DIR/bin/python" -m playwright install chromium
+echo "[deploy] Checking Playwright Chromium browser"
+if "$VENV_DIR/bin/python" -c "
+import pathlib, sys
+try:
+    from playwright._impl._driver import compute_driver_executable_path
+    sys.exit(0 if pathlib.Path(compute_driver_executable_path()).exists() else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+    echo "[deploy] Playwright Chromium already installed (version matches), skipping"
+else
+    # install-deps uses sudo internally for apt-get; only called when actually needed
+    echo "[deploy] Installing Playwright system dependencies"
+    "$VENV_DIR/bin/python" -m playwright install-deps chromium
+    echo "[deploy] Installing Playwright Chromium browser binary"
+    "$VENV_DIR/bin/python" -m playwright install chromium
+fi
 
 echo "[deploy] Verifying application import"
 APP_CONFIG_PATH="$CONFIG_PATH" "$VENV_DIR/bin/python" - <<'PY'
