@@ -68,12 +68,16 @@ def get_is_admin(x_api_key: Optional[str] = Header(None)) -> bool:
 
 def _resolve_client_id(client_id: Optional[str], api_key: Optional[str]) -> str:
     if api_key:
-        if api_key != settings.api_key:
-            from core.client_keys import client_key_store
-            resolved = client_key_store.get_client_id(api_key)
-            if not resolved:
-                raise HTTPException(status_code=401, detail="Invalid API key")
-            return resolved
+        if settings.api_key and api_key == settings.api_key:
+            # Sentinel value for admin API key usage (instead of empty string):
+            # logs show "client='__admin__'" instead of "client=''",
+            # DB records are traceable, and ownership checks bypass anyway.
+            return client_id or "__admin__"
+        from core.client_keys import client_key_store
+        resolved = client_key_store.get_client_id(api_key)
+        if not resolved:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        return resolved
     if not client_id:
         raise HTTPException(status_code=400, detail="X-Client-ID header is required")
     return client_id
