@@ -168,13 +168,15 @@ document.querySelector("#clear-api-key").addEventListener("click", () => {
   renderCredentials();
 });
 
-// Onion link handler selector
+// Onion link handler selector — guard against missing element in the DOM
 const onionSelect = document.querySelector("#onion-handler");
-onionSelect.value = onionHandler;
-onionSelect.addEventListener("change", () => {
-  onionHandler = onionSelect.value;
-  localStorage.setItem(ONION_HANDLER_KEY, onionHandler);
-});
+if (onionSelect) {
+  onionSelect.value = onionHandler;
+  onionSelect.addEventListener("change", () => {
+    onionHandler = onionSelect.value;
+    localStorage.setItem(ONION_HANDLER_KEY, onionHandler);
+  });
+}
 
 healthStatus.addEventListener("click", () => {
   const href = healthStatus.dataset.href;
