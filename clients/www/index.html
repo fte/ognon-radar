@@ -13,6 +13,24 @@
         <p class="eyebrow">Demo API en production</p>
         <h1>Ognon Radar</h1>
         <p>Un parcours interactif pour visualiser les endpoints, lancer une recherche, suivre le job en direct et lire le resultat final.</p>
+        <div class="onion-links">
+          <span class="onion-entry">
+            <span class="onion-label">API</span>
+            <a href="http://ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion" target="_blank" rel="noreferrer">ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion</a>
+          </span>
+          <span class="onion-entry">
+            <span class="onion-label">Interface</span>
+            <a href="http://ognonrad6576fe7fwuxiwq6ubjyag2fp25zr7y5yhmiq5xob2qla7oid.onion" target="_blank" rel="noreferrer">ognonrad6576fe7fwuxiwq6ubjyag2fp25zr7y5yhmiq5xob2qla7oid.onion</a>
+          </span>
+          <span class="onion-config">
+            <span class="onion-label">Liens .onion</span>
+            <select id="onion-handler" class="onion-select">
+              <option value="default">Navigateur par défaut</option>
+              <option value="tor">Tor Browser (tor://)</option>
+              <option value="copy">Copier le lien</option>
+            </select>
+          </span>
+        </div>
       </div>
       <div class="header-status">
         <output id="health-status" aria-live="polite">Verification API...</output>
@@ -166,6 +184,20 @@
         </div>
         <ol id="endpoint-list" class="endpoint-list" aria-label="Parcours des endpoints"></ol>
       </section>
+      <div class="footer-onion">
+        <p class="eyebrow">Accès Tor</p>
+        <div class="footer-onion-links">
+          <span class="onion-entry">
+            <span class="onion-label">API</span>
+            <a href="http://ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion" target="_blank" rel="noreferrer">ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion</a>
+          </span>
+          <span class="onion-entry">
+            <span class="onion-label">Interface</span>
+            <a href="http://ognonrad6576fe7fwuxiwq6ubjyag2fp25zr7y5yhmiq5xob2qla7oid.onion" target="_blank" rel="noreferrer">ognonrad6576fe7fwuxiwq6ubjyag2fp25zr7y5yhmiq5xob2qla7oid.onion</a>
+          </span>
+        </div>
+        <p class="footer-onion-hint">Ces adresses ne sont accessibles que via le réseau Tor. <br>Utilisez <a href="https://www.torproject.org/download/" target="_blank" rel="noreferrer">Tor Browser</a> ou <a href="https://brave.com/download/" target="_blank" rel="noreferrer">Brave</a> (fenêtre Tor privée).</p>
+      </div>
     </footer>
   </body>
 </html>

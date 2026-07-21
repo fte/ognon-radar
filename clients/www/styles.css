@@ -163,6 +163,151 @@ section {
   color: var(--muted);
 }
 
+.onion-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.onion-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .8rem;
+}
+
+.onion-label {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #2a2040;
+  color: var(--accent-strong);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.onion-entry a {
+  color: var(--accent);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  transition: color .15s ease;
+}
+
+.onion-entry a:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Onion link handler config selector */
+.onion-config {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.onion-select {
+  width: auto;
+  min-height: 0;
+  padding: 4px 24px 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: .78rem;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6' fill='%239080aa'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 10px 6px;
+}
+
+.onion-select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--accent);
+}
+
+/* Footer onion section */
+.footer-onion {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.footer-onion > .eyebrow {
+  margin-bottom: 10px;
+}
+
+.footer-onion-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+}
+
+.footer-onion-hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.6;
+}
+
+.footer-onion-hint a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Onion badge on search result links */
+.onion-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #1d2a20;
+  color: #6cb87a;
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  margin-left: 6px;
+  cursor: default;
+}
+
+/* Toast notification */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  color: var(--accent-strong);
+  font-size: .85rem;
+  font-weight: 600;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity .25s ease, transform .25s ease;
+  pointer-events: none;
+}
+
+.toast--show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 .header-status {
   display: flex;
   flex-direction: column;
@@ -711,6 +856,15 @@ article.has-thumb {
 
   .credentials-grid {
     grid-template-columns: 1fr;
+  }
+
+  .onion-config {
+    margin-left: 0;
+  }
+
+  .footer-onion-links {
+    flex-direction: column;
+    gap: 6px;
   }
 }
 

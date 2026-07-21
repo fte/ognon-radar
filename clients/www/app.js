@@ -5,12 +5,14 @@ const API_BASE_URL = (_h === "localhost" || _h === "127.0.0.1" || _h === "")
 const CLIENT_ID_KEY = "ognon-client-id";
 const PLACEHOLDER_SRC = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='60'%3E%3Crect width='84' height='60' fill='%23222'/%3E%3Ctext x='42' y='34' font-size='9' font-family='sans-serif' fill='%23555' text-anchor='middle'%3Eno image%3C/text%3E%3C/svg%3E`;
 const API_KEY_KEY = "ognon-api-key";
+const ONION_HANDLER_KEY = "ognon-onion-handler";
 
 
 let clientId = localStorage.getItem(CLIENT_ID_KEY) || generateClientId();
 localStorage.setItem(CLIENT_ID_KEY, clientId);
 
 let storedApiKey = localStorage.getItem(API_KEY_KEY) || null;
+let onionHandler = localStorage.getItem(ONION_HANDLER_KEY) || "default";
 
 const endpoints = [
   {
@@ -164,6 +166,14 @@ document.querySelector("#clear-api-key").addEventListener("click", () => {
   storedApiKey = null;
   localStorage.removeItem(API_KEY_KEY);
   renderCredentials();
+});
+
+// Onion link handler selector
+const onionSelect = document.querySelector("#onion-handler");
+onionSelect.value = onionHandler;
+onionSelect.addEventListener("change", () => {
+  onionHandler = onionSelect.value;
+  localStorage.setItem(ONION_HANDLER_KEY, onionHandler);
 });
 
 healthStatus.addEventListener("click", () => {
@@ -552,6 +562,15 @@ function renderResult(item, thumbMap) {
   link.textContent = item.title || item.url;
   link.rel = "noreferrer";
   title.append(link);
+  if (isOnionUrl(item.url)) {
+    const badge = document.createElement("span");
+    badge.className = "onion-badge";
+    badge.textContent = "\uD83E\uDDC5 Tor";
+    title.append(badge);
+    link.addEventListener("click", (e) => {
+      handleOnionClick(e, item.url);
+    });
+  }
 
   snippet.textContent = item.snippet || "Aucun extrait disponible.";
   footer.textContent = `Occurrences: ${item.term_count ?? "-"} - profondeur: ${item.depth ?? "-"}`;
@@ -784,4 +803,41 @@ function failScenario(error) {
   setBusy(false);
   setStatus(error.message, "failed");
   setMeterState("failed");
+}
+
+/* ───── Gestion des liens .onion ───── */
+
+function isOnionUrl(url) {
+  return url && url.includes(".onion");
+}
+
+function handleOnionClick(event, url) {
+  if (onionHandler === "copy") {
+    event.preventDefault();
+    navigator.clipboard.writeText(url).catch(() => {});
+    showToast("Lien .onion copié ! Collez-le dans Tor Browser.");
+  } else if (onionHandler === "tor") {
+    event.preventDefault();
+    const torUrl = "tor://" + url.replace(/^https?:\/\//, "");
+    window.open(torUrl, "_blank", "noreferrer");
+    // tor:// est reconnu par certaines configs Tor Browser
+    // sinon, Brave ouvre les .onion en fenêtre privée Tor
+  }
+  // default: laisser le navigateur gérer (Brave gère .onion nativement)
+}
+
+function showToast(message) {
+  let toast = document.getElementById("onion-toast");
+  if (!toast) {
+    toast = document.createElement("output");
+    toast.id = "onion-toast";
+    toast.className = "toast";
+    document.body.append(toast);
+  }
+  toast.textContent = message;
+  toast.classList.add("toast--show");
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => {
+    toast.classList.remove("toast--show");
+  }, 3000);
 }
