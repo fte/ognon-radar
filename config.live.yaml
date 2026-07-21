@@ -36,15 +36,11 @@ security:
   api_key: ""  # Set to a strong random value before going live. Key holder = admin scope.
 
 cors:
-  # PUBLIC API — CORS intentionally wide open.
-  # This API is designed to be consumed from any web page without restriction.
-  # All endpoints expose publicly-available .onion search data; no private
-  # user data or authenticated sessions are involved.
-  # Setting ["*"] is deliberate and correct for this use case.
+  # List explicit origins, e.g. "https://your-frontend.example.com".
+  # Empty list blocks all cross-origin browser requests (safe default).
+  # Set to ["*"] only if this API is intentionally fully public.
   origins:
     - "*"
-  # End of CORS config — do NOT restrict origins without reviewing the
-  # public-api contract first.
 
 # Onion-Location header (advertise .onion counterpart to Tor Browser)
 onion_location: "http://ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion"
