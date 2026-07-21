@@ -19,6 +19,7 @@ import argparse
 import os
 import pathlib
 import sys
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,16 +72,35 @@ def _check_via_internal_api(cache_root: pathlib.Path) -> bool:
 
 def _check_via_glob(cache_root: pathlib.Path) -> bool:
     """
-    Fallback: look for any ``chromium_headless_shell-*/chrome-headless-shell*``
-    binary in the Playwright cache.
+    Fallback: scan the Playwright cache for any existing Chromium binary.
+
+    Tries several known layouts (Linux, macOS, Windows) so the check works
+    regardless of the platform.  If none match, returns False.
 
     This is less precise (any version, not necessarily the one the installed
     ``playwright`` package expects), but doesn't depend on any private API.
     """
-    return bool(sorted(cache_root.glob("chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell")))
+    patterns = [
+        # Linux (headless shell – default for install chromium)
+        "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+        # Linux (full Chromium)
+        "chromium-*/chrome-linux/chrome",
+        # macOS
+        "chromium_headless_shell-*/chrome-headless-shell-mac-arm64/chrome-headless-shell",
+        "chromium_headless_shell-*/chrome-headless-shell-mac-x64/chrome-headless-shell",
+        "chromium-*/chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium",
+        "chromium-*/chrome-mac-x64/Chromium.app/Contents/MacOS/Chromium",
+        # Windows (WSL / cross-platform)
+        "chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe",
+        "chromium-*/chrome-win64/chrome.exe",
+    ]
+    for pattern in patterns:
+        if sorted(cache_root.glob(pattern)):
+            return True
+    return False
 
 
-def chromium_installed(cache_root: pathlib.Path | None = None) -> bool:
+def chromium_installed(cache_root: Optional[pathlib.Path] = None) -> bool:
     """Return ``True`` when the expected Chromium binary exists on disk."""
     if cache_root is None:
         cache_root = _resolve_cache_root()

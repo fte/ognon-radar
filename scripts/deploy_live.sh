@@ -65,7 +65,8 @@ echo "[deploy] Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 
 echo "[deploy] Checking Playwright Chromium browser"
-if "$VENV_DIR/bin/python" "$APP_DIR/scripts/check_playwright.py" --verbose 2>&1; then
+# cd "$APP_DIR" was already executed above, so the relative path is safe
+if "$VENV_DIR/bin/python" scripts/check_playwright.py --verbose 2>&1; then
     echo "[deploy] Playwright Chromium already installed (version matches), skipping"
 else
     cat <<'INFO'
