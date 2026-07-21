@@ -48,10 +48,13 @@ security:
   api_key: ""  # Leave empty to disable auth (dev default). Set a value in config.live.yaml.
   # Admin access = presenting the api_key. No separate role config needed.
 
-# CORS
+# CORS — intentionally wide open for public API
+# This is a public API consumed from arbitrary web pages (e.g. the frontend
+# at clients/www/). No private data or authenticated sessions are exposed.
+# The ["*"] origin is deliberate. See config.live.yaml for the prod comment.
 cors:
   origins:
-    - "*"  # Configure properly for production
+    - "*"
 
 # Onion-Location header (advertise .onion counterpart to Tor Browser)
 onion_location: ""  # e.g. "http://youraddress.onion"

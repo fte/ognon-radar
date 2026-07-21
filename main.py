@@ -60,6 +60,26 @@ async def lifespan(app: FastAPI):
     logger.info("Cleanup complete")
 
 
+# OpenAPI tags metadata — visible in /docs and /openapi.json
+# These tags document the public nature of the API for consumers and code reviews.
+openapi_tags = [
+    {
+        "name": "public-api",
+        "description": (
+            "This API is **intentionally public**. "
+            "All endpoints expose publicly-available .onion search data. "
+            "CORS is set to `*` and that is deliberate — any website can make "
+            "XHR/fetch requests. No authentication is required for search, "
+            "capture, or screenshot endpoints. See `config.live.yaml` (cors.origins) "
+            "for the security rationale."
+        ),
+    },
+    {
+        "name": "root",
+        "description": "API root and discovery endpoints.",
+    },
+]
+
 # Create FastAPI application
 app = FastAPI(
     title=settings.api_title,
@@ -67,10 +87,23 @@ app = FastAPI(
     description=settings.api_description,
     lifespan=lifespan,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    openapi_tags=openapi_tags,
+    contact={
+        "name": "Ognon Radar Project",
+        "url": "https://github.com/ognon-radar",
+        "email": "security@ognon-radar.local",
+    },
+    license_info={
+        "name": "MIT License",
+        "identifier": "MIT",
+    },
 )
 
 # Configure CORS
+# NOTE: allow_origins=["*"] is intentional — see openapi_tags "public-api".
+# This is a public API. Restricting CORS would break frontends served from
+# arbitrary domains (e.g. clients/www/ opened as file:// or hosted anywhere).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
