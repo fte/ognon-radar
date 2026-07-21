@@ -64,6 +64,15 @@ echo "[deploy] Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 
+echo "[deploy] Installing Playwright system dependencies (libnss3, libatk, etc.)"
+"$VENV_DIR/bin/python" -m playwright install-deps chromium
+
+echo "[deploy] Removing old Playwright browser cache to avoid version conflicts"
+rm -rf "$HOME/.cache/ms-playwright"
+
+echo "[deploy] Installing Playwright Chromium browser binary"
+"$VENV_DIR/bin/python" -m playwright install chromium
+
 echo "[deploy] Verifying application import"
 APP_CONFIG_PATH="$CONFIG_PATH" "$VENV_DIR/bin/python" - <<'PY'
 import main
