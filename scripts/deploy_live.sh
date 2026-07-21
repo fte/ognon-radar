@@ -75,11 +75,22 @@ except Exception:
 " 2>/dev/null; then
     echo "[deploy] Playwright Chromium already installed (version matches), skipping"
 else
-    # install-deps uses sudo internally for apt-get; only called when actually needed
-    echo "[deploy] Installing Playwright system dependencies"
-    "$VENV_DIR/bin/python" -m playwright install-deps chromium
-    echo "[deploy] Installing Playwright Chromium browser binary"
-    "$VENV_DIR/bin/python" -m playwright install chromium
+    echo "[deploy] Playwright Chromium missing — installing (~200 MB download, 30-60s on typical connection)"
+    echo "[deploy] Installing Playwright system dependencies (requires sudo for apt-get)"
+    "$VENV_DIR/bin/python" -m playwright install-deps chromium || {
+        rc=$?
+        echo "ERROR: Failed to install Playwright system dependencies (exit code $rc)"
+        echo "  This usually requires sudo/root for apt-get. Check your NOPASSWD sudo rules."
+        exit $rc
+    }
+    echo "[deploy] Downloading and installing Chromium browser binary"
+    "$VENV_DIR/bin/python" -m playwright install chromium || {
+        rc=$?
+        echo "ERROR: Failed to download/install Playwright Chromium (exit code $rc)"
+        echo "  Check network connectivity and disk space (~200 MB required)."
+        exit $rc
+    }
+    echo "[deploy] Playwright Chromium installed successfully"
 fi
 
 echo "[deploy] Verifying application import"

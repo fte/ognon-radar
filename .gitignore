@@ -64,9 +64,6 @@ screenshots/
 crawler_output/
 output/
 
-# Playwright browser binaries (installed by deploy script)
-ms-playwright/
-
 # Runtime data (SQLite DBs, WAL files)
 data/*
 ognon-jobs/*
