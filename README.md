@@ -188,9 +188,16 @@ docker-compose up
 
 ### Running Tests
 
+This project is **Docker-only** — there is no local Python environment.
+All tests run inside the API container:
+
 ```bash
-# TODO: Add pytest tests
-docker-compose run api pytest
+make test
+# or directly:
+docker-compose run --rm api python -m pytest tests/ -v
+
+# Run a specific test file:
+docker-compose run --rm api python -m pytest tests/test_capture.py -v
 ```
 
 ### Code Style

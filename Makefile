@@ -28,10 +28,7 @@ shell:             ## Open a shell inside the running API container
 
 # ── Tests ───────────────────────────────────────────────────────────
 
-test:              ## Run tests locally (venv)
-	@.venv/bin/python -m pytest tests/ -v
-
-test-docker:       ## Run tests inside Docker
+test:              ## Run tests inside Docker (this project has NO local venv)
 	docker-compose run --rm api python -m pytest tests/ -v
 
 # ── Profiles ────────────────────────────────────────────────────────

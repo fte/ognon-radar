@@ -64,6 +64,42 @@ echo "[deploy] Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 
+echo "[deploy] Checking Playwright Chromium browser"
+# cd "$APP_DIR" was already executed above, so the relative path is safe
+if "$VENV_DIR/bin/python" scripts/check_playwright.py --verbose 2>&1; then
+    echo "[deploy] Playwright Chromium already installed (version matches), skipping"
+else
+    cat <<'INFO'
+  ┌─ Playwright Chromium is missing ──────────────────────────────────┐
+  │                                                                   │
+  │  The deploy script will now:                                      │
+  │    1. Install system libraries via sudo apt-get  (requires sudo)  │
+  │    2. Download ~200 MB of Chromium binaries    (30-60s typical)   │
+  │                                                                   │
+  │  If sudo prompts for a password, grant NOPASSWD for apt-get:      │
+  │    echo '<USER> ALL=(ALL) NOPASSWD: /usr/bin/apt-get'             │
+  │    | sudo tee /etc/sudoers.d/playwright                           │
+  │                                                                   │
+  └───────────────────────────────────────────────────────────────────┘
+INFO
+    echo "[deploy] Installing Playwright system dependencies"
+    "$VENV_DIR/bin/python" -m playwright install-deps chromium || {
+        rc=$?
+        echo "ERROR: Failed to install Playwright system dependencies (exit code $rc)"
+        echo "  This usually requires sudo/root for apt-get."
+        echo "  Check your NOPASSWD sudo rules (see info box above)."
+        exit $rc
+    }
+    echo "[deploy] Downloading and installing Chromium browser binary"
+    "$VENV_DIR/bin/python" -m playwright install chromium || {
+        rc=$?
+        echo "ERROR: Failed to download/install Playwright Chromium (exit code $rc)"
+        echo "  Check network connectivity and disk space (~200 MB required)."
+        exit $rc
+    }
+    echo "[deploy] Playwright Chromium installed successfully"
+fi
+
 echo "[deploy] Verifying application import"
 APP_CONFIG_PATH="$CONFIG_PATH" "$VENV_DIR/bin/python" - <<'PY'
 import main
