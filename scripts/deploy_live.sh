@@ -50,6 +50,13 @@ git checkout "$BRANCH"
 git reset --hard "origin/$BRANCH"
 git clean -fd
 
+echo "[deploy] Injecting deploy indicator into frontend"
+HASH="$(git rev-parse HEAD)"
+HUE="$((16#${HASH:0:6} % 360))"
+SHORT="${HASH:0:7}"
+DATE="$(date -u +'%d/%m/%Y à %Hh%M UTC')"
+sed -i "s|title=\"Développement local\"|style=\"background: hsl($HUE, 60%, 52%)\" title=\"Déployé le $DATE — $SHORT\"|" "$APP_DIR/clients/www/index.html"
+
 echo "[deploy] Ensuring Python virtual environment"
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   python3 -m venv "$VENV_DIR"
