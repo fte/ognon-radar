@@ -25,13 +25,13 @@ jobs:
           # --rm removes the container after run, but test-results/ stays on host.
           mkdir -p test-results
           docker compose run --rm \
-            -v $(pwd)/test-results:/tmp/test-results \
+            -v ${{ github.workspace }}/test-results:/tmp/test-results \
             api python -m pytest tests/ -v \
             --junitxml=/tmp/test-results/junit.xml
 
       - name: Publish test results
         if: always()
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v3
         with:
           name: pytest-results
           path: test-results/junit.xml
