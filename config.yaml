@@ -14,7 +14,9 @@ tor:
   check_url: "https://check.torproject.org/"
   control_host: "tor"
   control_port: 9051
-  control_password: "ognon-radar-ctrl"  # must match TOR_CONTROL_PASSWORD env var in docker-compose
+  # Password is read from TOR_CONTROL_PASSWORD env var (set in docker-compose.yml).
+  # Keep this empty; the value in docker-compose.yml must match.
+  control_password: ""
 
 # Crawling Settings
 crawling:
@@ -70,6 +72,16 @@ capture:
 jobs:
   max_workers: 2         # Concurrent crawl threads
   db_path: "data/jobs.db"  # SQLite job store
+
+# Rate Limiting Settings
+rate_limiting:
+  # Default limits act as a safety net for routes without explicit decorators.
+  # Format: "<count>/<period>" e.g. "60/minute", "1000/hour".
+  # Set to empty string to disable default limits (each route must opt in).
+  default_limits:
+    - "120/minute"
+  # Backend storage: "memory://" (default, no deps), "redis://host:6379"
+  storage_uri: "memory://"
 
 # Webhook Settings
 webhook:

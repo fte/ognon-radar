@@ -53,7 +53,8 @@ services:
       nofile:
         soft: 4096
         hard: 8192
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # Production: no --reload. Use the Dockerfile's default CMD for prod.
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
 
   # Dark Crawler CLI (original script)
   crawler:

@@ -6,11 +6,12 @@ import json
 import logging
 from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from core.auth import get_is_admin, require_api_key, require_client_id, require_client_id_sse
 from core.job_manager import job_manager, JobStatus
+from core.rate_limiter import limiter
 from models.schemas import JobResponse, JobListResponse, JobType
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,9 @@ def _check_ownership(job: dict, client_id: str, is_admin: bool) -> None:
 
 
 @router.get("/jobs", response_model=JobListResponse, status_code=200)
+@limiter.limit("60/minute")
 async def list_jobs(
+    request: Request,
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),
     status: Optional[JobStatus] = Query(None, description="Filter by status"),
@@ -50,7 +53,9 @@ async def list_jobs(
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse, status_code=200)
+@limiter.limit("30/minute")
 async def get_job(
+    request: Request,
     job_id: str,
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),
@@ -71,7 +76,9 @@ async def get_job(
 
 
 @router.get("/jobs/{job_id}/stream")
+@limiter.limit("5/minute")
 async def stream_job(
+    request: Request,
     job_id: str,
     client_id: str = Depends(require_client_id_sse),
     is_admin: bool = Depends(get_is_admin),
@@ -116,7 +123,9 @@ async def stream_job(
 
 
 @router.post("/jobs/{job_id}/stream-token", status_code=200)
+@limiter.limit("10/minute")
 async def create_stream_token(
+    request: Request,
     job_id: str,
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),
@@ -135,7 +144,9 @@ async def create_stream_token(
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=200)
+@limiter.limit("10/minute")
 async def cancel_job(
+    request: Request,
     job_id: str,
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),
@@ -155,7 +166,9 @@ async def cancel_job(
 
 
 @router.delete("/jobs", status_code=200)
+@limiter.limit("10/minute")
 async def delete_all_jobs(
+    request: Request,
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),
     status: Optional[JobStatus] = Query(None, description="Filter by status (default: all terminal)"),
@@ -171,7 +184,9 @@ async def delete_all_jobs(
 
 
 @router.delete("/jobs/{job_id}", status_code=200)
+@limiter.limit("10/minute")
 async def delete_job(
+    request: Request,
     job_id: str,
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),

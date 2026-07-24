@@ -1,5 +1,16 @@
 # ognon-radar
 
+<p align="center">
+  <a href="https://github.com/fte/ognon-radar/actions/workflows/ci-audit.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/fte/ognon-radar/ci-audit.yml?label=pip-audit&logo=github&style=flat-square" alt="pip-audit">
+  </a>
+  <a href="https://github.com/fte/ognon-radar/actions/workflows/ci-tests.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/fte/ognon-radar/ci-tests.yml?label=tests&logo=pytest&style=flat-square" alt="tests">
+  </a>
+  <img src="https://img.shields.io/github/license/fte/ognon-radar?style=flat-square" alt="license">
+  <img src="https://img.shields.io/badge/python-3.11-blue?logo=python&style=flat-square" alt="python">
+</p>
+
 RESTful API for searching .onion (Tor hidden services) sites. Built with FastAPI and Docker.
 
 ## 🎯 Features

@@ -10,7 +10,11 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _PROXY = {"server": "socks5://tor:9050"}
-_LAUNCH_ARGS = ["--disable-dev-shm-usage"]
+_LAUNCH_ARGS = [
+    "--disable-dev-shm-usage",
+    "--no-sandbox",               # Required in Docker — Chrome sandbox requires kernel support absent in containers
+    "--disable-setuid-sandbox",    # Companion to --no-sandbox (disables the setuid sandbox helper)
+]
 
 
 class ScreenshotSession:

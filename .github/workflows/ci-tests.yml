@@ -1,0 +1,24 @@
+name: CI — Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker compose build api
+
+      - name: Run tests
+        run: |
+          # The Tor container starts automatically via depends_on.
+          docker compose run --rm api python -m pytest tests/ -v

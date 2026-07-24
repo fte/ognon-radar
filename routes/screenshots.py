@@ -6,12 +6,13 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from config import settings
 from core.auth import get_is_admin, require_client_id
 from core.job_manager import job_manager
+from core.rate_limiter import limiter
 from models.schemas import ScreenshotRequest, JobCreatedResponse
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,10 @@ _SAFE_FILENAME = re.compile(r"^[a-zA-Z0-9_\-]+\.png$")
 
 
 @router.post("/screenshots", response_model=JobCreatedResponse, status_code=202)
+@limiter.limit("10/minute;60/hour")
 async def screenshot_onion_site(
-    request: ScreenshotRequest,
+    body: ScreenshotRequest,
+    request: Request,
     client_id: str = Depends(require_client_id),
 ) -> JobCreatedResponse:
     """
@@ -32,9 +35,9 @@ async def screenshot_onion_site(
     Returns immediately with a job_id. Poll GET /api/v1/jobs/{job_id} for status,
     then download via GET /api/v1/screenshots/{storage_key}/download.
     """
-    job_id = job_manager.submit_screenshot_job(request.model_dump(), client_id=client_id)
+    job_id = job_manager.submit_screenshot_job(body.model_dump(), client_id=client_id)
     now = datetime.now(timezone.utc).isoformat()
-    logger.info(f"Screenshot job {job_id} queued for {request.start_url} (client={client_id})")
+    logger.info(f"Screenshot job {job_id} queued for {body.start_url} (client={client_id})")
     return JobCreatedResponse(
         job_id=job_id,
         client_id=client_id,
@@ -45,7 +48,9 @@ async def screenshot_onion_site(
 
 
 @router.get("/screenshots/{storage_key}/download")
+@limiter.limit("20/minute")
 async def download_screenshot(
+    request: Request,
     storage_key: str,
     client_id: str = Depends(require_client_id),
     is_admin: bool = Depends(get_is_admin),
@@ -71,7 +76,9 @@ async def download_screenshot(
 
 
 @router.get("/jobs/{job_id}/screenshots/{filename}")
+@limiter.limit("20/minute")
 async def get_search_screenshot(
+    request: Request,
     job_id: str,
     filename: str,
     client_id: str = Depends(require_client_id),

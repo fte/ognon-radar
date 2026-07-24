@@ -77,9 +77,13 @@ def job_manager(_patch_config, tmp_path):
 
 
 @pytest.fixture()
-def webhook_manager(_patch_config, tmp_path):
+def webhook_manager(_patch_config, tmp_path, monkeypatch):
     from config import Settings
     settings = Settings(str(tmp_path / "config.yaml"))
+    # Ensure core.webhook_manager picks up the patched settings by reloading
+    import importlib
+    import core.webhook_manager as wm_mod
+    importlib.reload(wm_mod)
     from core.webhook_manager import WebhookManager
     wm = WebhookManager(settings.webhook_db_path)
     wm.startup()

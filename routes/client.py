@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from core.auth import require_client_id
 from core.client_keys import client_key_store
+from core.rate_limiter import limiter
 
 router = APIRouter(prefix="/api/v1/client", tags=["client"])
 
 
 @router.post("/key", summary="Generate a personal API key for this client")
-async def generate_client_key(client_id: str = Depends(require_client_id)):
+@limiter.limit("5/minute;20/hour")
+async def generate_client_key(request: Request, client_id: str = Depends(require_client_id)):
     """
     Creates a persistent API key bound to the caller's client-id.
     The key can replace X-Client-ID on all subsequent requests.
