@@ -5,12 +5,13 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from config import settings
 from core.auth import require_client_id
 from core.job_manager import job_manager
+from core.rate_limiter import limiter
 from models.schemas import CaptureRequest, JobCreatedResponse
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,10 @@ router = APIRouter(prefix="/api/v1", tags=["capture"])
 
 
 @router.post("/capture", response_model=JobCreatedResponse, status_code=202)
+@limiter.limit("5/minute;30/hour")
 async def capture_onion_site(
-    request: CaptureRequest,
+    body: CaptureRequest,
+    request: Request,
     client_id: str = Depends(require_client_id),
 ) -> JobCreatedResponse:
     """
@@ -30,9 +33,9 @@ async def capture_onion_site(
     Returns immediately with a job_id. Poll GET /api/v1/jobs/{job_id} for status,
     then download via GET /api/v1/captures/{job_id}/download.
     """
-    job_id = job_manager.submit_capture_job(request.model_dump(), client_id=client_id)
+    job_id = job_manager.submit_capture_job(body.model_dump(), client_id=client_id)
     now = datetime.now(timezone.utc).isoformat()
-    logger.info(f"Capture job {job_id} queued for {request.start_url} (client={client_id})")
+    logger.info(f"Capture job {job_id} queued for {body.start_url} (client={client_id})")
     return JobCreatedResponse(
         job_id=job_id,
         client_id=client_id,
@@ -43,7 +46,8 @@ async def capture_onion_site(
 
 
 @router.get("/captures/{job_id}/download")
-async def download_capture(job_id: str) -> FileResponse:
+@limiter.limit("20/minute")
+async def download_capture(request: Request, job_id: str) -> FileResponse:
     """
     Download the .warc.gz archive produced by a completed capture job.
     """

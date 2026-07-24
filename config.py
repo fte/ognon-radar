@@ -42,7 +42,9 @@ class Settings:
         self.tor_check_url: str = tor_config.get('check_url', 'https://check.torproject.org/')
         self.tor_control_host: str = tor_config.get('control_host', 'tor')
         self.tor_control_port: int = tor_config.get('control_port', 9051)
-        self.tor_control_password: str = tor_config.get('control_password', 'ognon-radar-ctrl')
+        # Prefer TOR_CONTROL_PASSWORD env var (set in docker-compose.yml).
+        # Falls back to config value — which should be kept empty in tracked files.
+        self.tor_control_password: str = os.getenv('TOR_CONTROL_PASSWORD', '') or tor_config.get('control_password', '')
         
         # Crawling Configuration
         crawl_config = config.get('crawling', {})
@@ -89,6 +91,11 @@ class Settings:
         self.webhook_timeout: float = webhook_config.get('timeout', 10)
         self.webhook_db_path: str = resolve_path(webhook_config.get('db_path', 'data/webhooks.db'))
         self.webhook_allow_insecure_urls: bool = webhook_config.get('allow_insecure_urls', False)
+
+        # Rate Limiting
+        rate_config = config.get('rate_limiting', {})
+        self.rate_limit_default: list = rate_config.get('default_limits', ['120/minute'])
+        self.rate_limit_storage_uri: str = rate_config.get('storage_uri', 'memory://')
 
         # Capture
         capture_config = config.get('capture', {})

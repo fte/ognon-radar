@@ -2,5 +2,5 @@
 -r requirements.txt
 
 stem==1.8.2          # Tor control
-nltk==3.8.1          # Natural language processing
-Pillow==10.2.0       # Image processing
+nltk>=3.9.0          # CVE-2024-39705: RCE via pickled data (upgrade from 3.8.1)
+Pillow>=11.0.0       # Multiple memory-safety CVEs (upgrade from 10.2.0)

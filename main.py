@@ -15,6 +15,11 @@ from core.tor_client import tor_client
 from core.job_manager import job_manager
 from core.webhook_manager import webhook_manager
 from core.client_keys import client_key_store
+from core.rate_limiter import (
+    limiter,
+    rate_limit_exceeded_handler,
+    RateLimitExceededError,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -100,6 +105,11 @@ app = FastAPI(
     },
 )
 
+# Attach the shared rate limiter to the app so slowapi's middleware can find it.
+# If slowapi is not installed, limiter is a no-op stub and this is harmless.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceededError, rate_limit_exceeded_handler)
+
 # Configure CORS
 # NOTE: allow_origins=["*"] is intentional — see openapi_tags "public-api".
 # This is a public API. Restricting CORS would break frontends served from
@@ -130,7 +140,8 @@ app.include_router(client_routes.router)
 
 
 @app.get("/", tags=["root"])
-async def root():
+@limiter.exempt
+async def root(request: Request):
     """
     Root endpoint with API information.
     """

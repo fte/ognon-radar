@@ -10,6 +10,7 @@ import time
 import json
 import csv
 import re
+import httpx
 import logging
 import sys
 import os
@@ -200,8 +201,10 @@ def download_image(session, image_url, output_dir, page_url, image_extensions, m
         if not any(parsed.path.lower().endswith(ext) for ext in image_extensions):
             return None
         
-        # Download image
-        response = session.get(image_url, timeout=15, stream=True)
+        # Download image with a read timeout — required even for streaming to
+        # prevent slow-read resource exhaustion (CWE-400). The 15s timeout
+        # covers the full transfer, not just the initial connection.
+        response = session.get(image_url, timeout=httpx.Timeout(15.0, read=15.0, connect=10.0), stream=True)
         response.raise_for_status()
         
         # Check content type
@@ -212,12 +215,17 @@ def download_image(session, image_url, output_dir, page_url, image_extensions, m
         
         chunks = []
         total = 0
+        start = time.monotonic()
         size_limit = max_size_mb * 1024 * 1024
         for chunk in response.iter_content(chunk_size=8192):
             chunks.append(chunk)
             total += len(chunk)
             if total > size_limit:
                 logging.warning(f"Image too large, skipping: {image_url}")
+                return None
+            # Guard against slow reads: abort if total transfer takes >30s
+            if time.monotonic() - start > 30.0:
+                logging.warning(f"Image download timed out (>30s stream read): {image_url}")
                 return None
         image_data = b''.join(chunks)
         
@@ -390,8 +398,8 @@ def scrape_onion_url(url, session, download_images=False, images_output_dir=None
                 logging.info(f"Downloaded {len(images_info)} image(s) from {url}")
         
         return title, text, soup, images_info
-    except Exception as e:
-        logging.error(f"Failed to scrape {url}: {e}")
+    except Exception as exc:
+        logging.error(f"Failed to scrape {url}: {exc}")
         return None, None, None, []
 
 

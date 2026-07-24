@@ -14,6 +14,7 @@ from config import settings
 from core.auth import generate_client_id, require_api_key
 from core.crawler import is_valid_onion_url
 from core.job_manager import job_manager
+from core.rate_limiter import limiter
 from models.schemas import SearchRequest, JobCreatedResponse
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ router = APIRouter(prefix="/api/v1", tags=["search"])
 
 
 @router.post("/search", response_model=JobCreatedResponse, status_code=202)
+@limiter.limit("10/minute;100/hour")
 async def search_onion_sites(
     request: Request,
     x_client_id: Optional[str] = Header(None, description="Client identifier for job tracking"),

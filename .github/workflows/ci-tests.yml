@@ -1,0 +1,39 @@
+name: CI — Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker compose build api
+
+      - name: Run tests
+        run: |
+          # Single run: verbose output + JUnit XML persisted via bind mount.
+          # The Tor container starts automatically via depends_on.
+          # --rm removes the container after run, but test-results/ stays on host.
+          mkdir -p test-results
+          docker compose run --rm \
+            -v $(pwd)/test-results:/tmp/test-results \
+            api python -m pytest tests/ -v \
+            --junitxml=/tmp/test-results/junit.xml
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: pytest-results
+          path: test-results/junit.xml
+          reporter: java-junit
+          fail-on-error: true
