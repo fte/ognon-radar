@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch, call
 import httpx
 import pytest
 from bs4 import BeautifulSoup
+from fastapi import Request
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -497,3 +498,94 @@ class TestJobManager:
         job = jm2.get_job("orphan-1")
         assert job["status"] == "failed"
         jm2.shutdown()
+
+
+# ── Rate Limiter ────────────────────────────────────────────────────────
+
+
+class TestRateLimitKey:
+    """Tests for _rate_limit_key extraction logic.
+
+    Verifies precedence: X-API-Key > X-Client-ID > remote IP.
+    Each bucket is scoped with a prefix so keys never collide.
+    """
+
+    @pytest.mark.parametrize("headers,client_host,expected", [
+        # API key takes precedence over everything else
+        ({"X-API-Key": "sk-abc", "X-Client-ID": "client-1"}, "1.2.3.4", "ak:sk-abc"),
+        # Client ID used when no API key
+        ({"X-Client-ID": "client-1"}, "1.2.3.4", "cid:client-1"),
+        # Fallback to X-Forwarded-For — uses real slowapi get_remote_address
+        # which returns request.client.host, not the X-Forwarded-For value
+        ({"X-Forwarded-For": "10.0.0.1, 10.0.0.2"}, "1.2.3.4", "1.2.3.4"),
+        # Fallback to request.client.host
+        ({}, "5.6.7.8", "5.6.7.8"),
+        # No client at all → 127.0.0.1
+        ({}, None, "127.0.0.1"),
+    ])
+    def test_rate_limit_key(self, headers, client_host, expected):
+        from core.rate_limiter import _rate_limit_key
+
+        req = MagicMock(spec=Request)
+        req.headers = headers
+        if client_host is not None:
+            req.client = MagicMock()
+            req.client.host = client_host
+        else:
+            req.client = None
+
+        assert _rate_limit_key(req) == expected
+
+
+class TestRateLimiterInstance:
+    """Verify the global limiter object is correctly instantiated."""
+
+    def test_limiter_is_configured(self):
+        from core.rate_limiter import limiter, _SLOWAPI_AVAILABLE
+
+        if _SLOWAPI_AVAILABLE:
+            from slowapi import Limiter as SlowAPILimiter
+            assert isinstance(limiter, SlowAPILimiter)
+            # Verify our custom key function is attached
+            assert limiter._key_func is not None
+        else:
+            # Stub mode — just verify it's not None
+            assert limiter is not None
+
+    def test_returns_429_when_limit_exceeded(self):
+        """End-to-end test: verify slowapi returns 429 when limit is exceeded.
+
+        Creates a minimal FastAPI app with our custom _rate_limit_key and a
+        low limit (1/minute), then hits the endpoint twice — the second call
+        must be rejected with 429.
+        """
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from slowapi import Limiter, _rate_limit_exceeded_handler
+        from slowapi.errors import RateLimitExceeded
+
+        from core.rate_limiter import _rate_limit_key
+
+        app = FastAPI()
+        limiter = Limiter(
+            key_func=_rate_limit_key,
+            default_limits=["1/minute"],
+            storage_uri="memory://",
+        )
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+        @app.get("/test")
+        @limiter.limit("1/minute")
+        async def test_endpoint(request: Request):
+            return {"ok": True}
+
+        with TestClient(app) as client:
+            resp1 = client.get("/test")
+            assert resp1.status_code == 200, f"First request: {resp1.status_code}"
+
+            resp2 = client.get("/test")
+            assert resp2.status_code == 429, f"Second request: {resp2.status_code}"
+            body = resp2.json()
+            # slowapi returns {error: ...} key, not {detail: ...}
+            assert "rate limit exceeded" in body.get("error", "").lower()
