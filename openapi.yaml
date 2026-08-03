@@ -1,0 +1,1149 @@
+openapi: "3.1.0"
+info:
+  title: Ognon Radar API
+  description: >
+    RESTful API for searching, capturing, and screenshotting .onion sites via the Tor network.
+
+    Submit search/capture/screenshot jobs asynchronously (202 Accepted), poll for results,
+    and download artifacts. All job costs are deducted from your credit balance.
+  version: "1.0.0"
+  contact:
+    name: Ognon Radar Project
+    url: "https://github.com/ognon-radar"
+    email: security@ognon-radar.local
+  license:
+    name: MIT License
+    identifier: MIT
+
+servers:
+  - url: "https://api.ognon-radar.local"
+    description: Production server
+  - url: "http://localhost:8000"
+    description: Local development
+
+# ── Security ─────────────────────────────────────────────────────────
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >
+        Persistent API key generated via `POST /api/v1/client/key`.
+        Required for all endpoints except `/health`. Pass in the `X-API-Key` header.
+    ClientId:
+      type: apiKey
+      in: header
+      name: X-Client-ID
+      description: >
+        Optional client identifier for job ownership scoping.
+        Automatically generated if omitted. Include on all job-related requests
+        to scope results to your client.
+
+  # ── Shared schemas ────────────────────────────────────────────────
+  schemas:
+    JobCreatedResponse:
+      type: object
+      required: [job_id, client_id, status, created_at, poll_url]
+      properties:
+        job_id:
+          type: string
+          description: Unique job identifier
+          example: "ognj-2a1f8c3e"
+        client_id:
+          type: string
+          description: Your client identifier — include in X-Client-ID on subsequent requests
+          example: "ognu-b7d3f91a"
+        status:
+          type: string
+          enum: [queued]
+          description: Initial job status
+        created_at:
+          type: string
+          format: date-time
+          description: ISO 8601 UTC creation timestamp
+        poll_url:
+          type: string
+          format: uri-reference
+          description: URL to poll for job status
+          example: "/api/v1/jobs/ognj-2a1f8c3e"
+
+    JobResponse:
+      type: object
+      required: [id, client_id, status, request, created_at]
+      properties:
+        id:
+          type: string
+          description: Job identifier
+        type:
+          type: string
+          enum: [search, capture, screenshot]
+          description: Job type
+        client_id:
+          type: string
+          description: Owning client identifier
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+          description: Current job status
+        request:
+          type: object
+          description: Original search/capture/screenshot request parameters
+        result:
+          type: object
+          nullable: true
+          description: Job result payload (present when completed)
+        progress:
+          type: object
+          nullable: true
+          description: "Capture progress while running: {pages, assets, size_bytes}"
+        error:
+          type: string
+          nullable: true
+          description: Error message (present when failed)
+        created_at:
+          type: string
+          format: date-time
+          description: ISO 8601 creation timestamp
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 start timestamp
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 completion timestamp
+
+    JobListResponse:
+      type: object
+      required: [jobs, total, limit, offset]
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobResponse"
+        total:
+          type: integer
+          description: Total jobs matching filter
+        limit:
+          type: integer
+          description: Page size
+        offset:
+          type: integer
+          description: Current offset
+
+    HealthResponse:
+      type: object
+      required: [status, tor_connected, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: API health status
+        tor_connected:
+          type: boolean
+          description: Whether the Tor proxy is reachable
+        timestamp:
+          type: string
+          format: date-time
+          description: Current server timestamp
+
+    SearchRequest:
+      type: object
+      required: [term]
+      properties:
+        term:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Search term to find in .onion sites
+          example: "cybersec"
+        start_url:
+          type: string
+          nullable: true
+          format: uri
+          description: "Starting .onion URL for crawling. Uses default seed from config if omitted."
+          example: "http://darknetbook.onion"
+        max_results:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 10
+          description: Maximum number of results to return
+        max_depth:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 2
+          description: Maximum crawl depth
+        max_pages:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+          description: Maximum pages to crawl
+        timeout:
+          type: integer
+          minimum: 10
+          maximum: 120
+          default: 30
+          description: Request timeout in seconds
+        include_screenshots:
+          type: boolean
+          default: false
+          description: Capture a screenshot for each crawled page (slower, costs more credits)
+
+    CaptureRequest:
+      type: object
+      required: [start_url]
+      properties:
+        start_url:
+          type: string
+          format: uri
+          description: Root .onion URL to capture into a WARC archive
+          example: "http://darknetbook.onion"
+        label:
+          type: string
+          nullable: true
+          maxLength: 40
+          description: Short label included in the archive filename
+        max_pages:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 20
+        max_depth:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 2
+        timeout:
+          type: integer
+          minimum: 10
+          maximum: 120
+          default: 30
+
+    ScreenshotRequest:
+      type: object
+      required: [start_url]
+      properties:
+        start_url:
+          type: string
+          format: uri
+          description: .onion URL to screenshot
+          example: "http://darknetbook.onion"
+        timeout:
+          type: integer
+          minimum: 10
+          maximum: 120
+          default: 30
+
+    WebhookConfig:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Webhook URL to call (must be HTTPS)
+          example: "https://my-server.com/webhooks/ognon"
+        events:
+          type: array
+          items:
+            type: string
+            enum: [job.completed, job.failed]
+          default: ["job.completed", "job.failed"]
+          description: Events to subscribe to
+        secret:
+          type: string
+          nullable: true
+          description: Optional secret for HMAC-SHA256 signature verification
+        active:
+          type: boolean
+          default: true
+          description: Whether webhook is active
+
+    WebhookConfigResponse:
+      type: object
+      required: [client_id, url, events, has_secret, active, created_at]
+      properties:
+        client_id:
+          type: string
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        has_secret:
+          type: boolean
+          description: Whether an HMAC secret is configured
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+        job_id:
+          type: string
+        client_id:
+          type: string
+        url:
+          type: string
+        event:
+          type: string
+        status:
+          type: string
+          enum: [success, failed, retrying]
+        attempt:
+          type: integer
+        response_status:
+          type: integer
+          nullable: true
+        response_text:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        sent_at:
+          type: string
+          format: date-time
+
+    StreamTokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Single-use SSE stream token
+        expires_in:
+          type: integer
+          description: Token lifetime in seconds
+
+    CancelResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+          enum: [cancelled]
+
+    DeleteResponse:
+      type: object
+      properties:
+        deleted:
+          type: integer
+          description: Number of deleted jobs
+
+    DeleteJobResponse:
+      type: object
+      properties:
+        job_id:
+          type: string
+        deleted:
+          type: boolean
+
+    ApiKeyResponse:
+      type: object
+      properties:
+        api_key:
+          type: string
+          description: Persistent API key
+        client_id:
+          type: string
+          description: Bound client identifier
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                properties:
+                  loc:
+                    type: array
+                    items:
+                      type: string
+                  msg:
+                    type: string
+                  type:
+                    type: string
+
+# ── Zuplo credit-cost header ────────────────────────────────────────
+  headers:
+    CreditCostHeader:
+      schema:
+        type: integer
+      description: "Number of credits deducted for this request (response header)"
+
+# ── Paths ────────────────────────────────────────────────────────────
+paths:
+  # Root ──────────────────────────────────────────────────────────────
+  /:
+    get:
+      tags: [Root]
+      summary: API root
+      description: Returns API metadata and endpoint index.
+      operationId: root
+      security: []
+      responses:
+        "200":
+          description: API metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  description:
+                    type: string
+                  docs:
+                    type: string
+                  health:
+                    type: string
+                  endpoints:
+                    type: object
+
+  # Health ────────────────────────────────────────────────────────────
+  /api/v1/health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: |
+        Health check endpoint to verify API and Tor connectivity.
+        Exempt from rate limiting. No API key required.
+      operationId: healthCheck
+      security: []
+      responses:
+        "200":
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Tor not connected or API unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Search ────────────────────────────────────────────────────────────
+  /api/v1/search:
+    post:
+      tags: [Search]
+      summary: Submit a search job
+      description: |
+        Submit an asynchronous search job for .onion sites containing a specific term.
+        Returns immediately with a `job_id`. Poll `GET /api/v1/jobs/{job_id}` for results.
+
+        **Credit cost:** 1 credit per search job.
+      operationId: submitSearch
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: X-Client-ID
+          in: header
+          schema:
+            type: string
+          required: false
+          description: Client identifier for job tracking (auto-generated if omitted)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "202":
+          description: Job accepted
+          headers:
+            X-Credit-Cost:
+              $ref: "#/components/headers/CreditCostHeader"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobCreatedResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "402":
+          description: Insufficient credits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Capture ───────────────────────────────────────────────────────────
+  /api/v1/capture:
+    post:
+      tags: [Capture]
+      summary: Submit a capture job
+      description: |
+        Submit an asynchronous capture job that downloads all pages and assets
+        (images, CSS, JS) from a .onion site into a `.warc.gz` archive.
+        Returns immediately with a `job_id`.
+
+        When completed, download via `GET /api/v1/captures/{job_id}/download`.
+
+        **Credit cost:** 3 credits per capture job.
+      operationId: submitCapture
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: X-Client-ID
+          in: header
+          schema:
+            type: string
+          required: false
+          description: Client identifier for job tracking (auto-generated if omitted)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaptureRequest"
+      responses:
+        "202":
+          description: Job accepted
+          headers:
+            X-Credit-Cost:
+              $ref: "#/components/headers/CreditCostHeader"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobCreatedResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "402":
+          description: Insufficient credits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/captures/{job_id}/download:
+    get:
+      tags: [Capture]
+      summary: Download WARC archive
+      description: |
+        Download the `.warc.gz` archive produced by a completed capture job.
+        Only available after job status is `completed`.
+      operationId: downloadCapture
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Job ID returned from the capture submission
+      responses:
+        "200":
+          description: WARC archive file
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Job or archive not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job not yet completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Screenshots ───────────────────────────────────────────────────────
+  /api/v1/screenshots:
+    post:
+      tags: [Screenshots]
+      summary: Submit a screenshot job
+      description: |
+        Submit an asynchronous screenshot job for a .onion page.
+        Returns immediately with a `job_id`.
+
+        When completed, download via `GET /api/v1/screenshots/{storage_key}/download`.
+
+        **Credit cost:** 2 credits per screenshot job.
+      operationId: submitScreenshot
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: X-Client-ID
+          in: header
+          schema:
+            type: string
+          required: false
+          description: Client identifier for job tracking (auto-generated if omitted)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScreenshotRequest"
+      responses:
+        "202":
+          description: Job accepted
+          headers:
+            X-Credit-Cost:
+              $ref: "#/components/headers/CreditCostHeader"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobCreatedResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "402":
+          description: Insufficient credits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/screenshots/{storage_key}/download:
+    get:
+      tags: [Screenshots]
+      summary: Download screenshot PNG
+      description: Download the PNG produced by a completed screenshot job.
+      operationId: downloadScreenshot
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: storage_key
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: Storage key from the job result
+      responses:
+        "200":
+          description: Screenshot PNG
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Screenshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/jobs/{job_id}/screenshots/{filename}:
+    get:
+      tags: [Screenshots]
+      summary: Get per-page search screenshot
+      description: Serve a per-page screenshot from a search job (when `include_screenshots` was true).
+      operationId: getSearchScreenshot
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Search job ID
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+\\.png$"
+          description: Screenshot filename
+      responses:
+        "200":
+          description: Screenshot PNG
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Screenshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Jobs ──────────────────────────────────────────────────────────────
+  /api/v1/jobs:
+    get:
+      tags: [Jobs]
+      summary: List jobs
+      description: |
+        List jobs scoped to your client. Returns paginated results.
+        Filters available for status and job type.
+      operationId: listJobs
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [queued, running, completed, failed, cancelled]
+          description: Filter by job status
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [search, capture, screenshot]
+          description: Filter by job type
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Max jobs to return
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Pagination offset
+      responses:
+        "200":
+          description: Job list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobListResponse"
+
+    delete:
+      tags: [Jobs]
+      summary: Delete all terminal jobs
+      description: Delete completed/failed/cancelled jobs for your client.
+      operationId: deleteAllJobs
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [queued, running, completed, failed, cancelled]
+          description: "Filter by status (default: all terminal states)"
+      responses:
+        "200":
+          description: Deletion count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResponse"
+
+  /api/v1/jobs/{job_id}:
+    get:
+      tags: [Jobs]
+      summary: Get job details
+      description: |
+        Get full details of a job including status, progress, and results.
+        Search results can be paginated with `?offset=N&limit=N`.
+      operationId: getJob
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Job ID
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Result offset for pagination
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+          description: Max results to return
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags: [Jobs]
+      summary: Delete a single job
+      description: Delete a completed, failed, or cancelled job.
+      operationId: deleteJob
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteJobResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job cannot be deleted in its current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/jobs/{job_id}/stream:
+    get:
+      tags: [Jobs]
+      summary: Stream job status via SSE
+      description: |
+        Stream job status changes as Server-Sent Events.
+        Closes automatically on terminal state (completed/failed/cancelled).
+
+        **Note:** Since EventSource cannot send custom headers, use `?token=` for auth
+        (generate token via `POST /api/v1/jobs/{job_id}/stream-token`).
+      operationId: streamJob
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: interval
+          in: query
+          required: false
+          schema:
+            type: number
+            minimum: 0.5
+            maximum: 30
+            default: 2.0
+          description: Poll interval in seconds
+        - name: token
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Single-use SSE token (alternative to header auth)
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE data stream with job JSON payloads
+
+  /api/v1/jobs/{job_id}/stream-token:
+    post:
+      tags: [Jobs]
+      summary: Create SSE stream token
+      description: |
+        Mint a short-lived (60s) single-use token for SSE streaming via
+        `GET /api/v1/jobs/{job_id}/stream?token=...`.
+        Required because EventSource cannot send custom headers.
+      operationId: createStreamToken
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Stream token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StreamTokenResponse"
+
+  /api/v1/jobs/{job_id}/cancel:
+    post:
+      tags: [Jobs]
+      summary: Cancel a queued job
+      description: Cancel a queued job. Running jobs cannot be cancelled.
+      operationId: cancelJob
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Job cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job cannot be cancelled in its current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Webhooks ─────────────────────────────────────────────────────────
+  /api/v1/webhooks/config:
+    put:
+      tags: [Webhooks]
+      summary: Register or update webhook config
+      description: |
+        Configure a webhook URL that will receive job completion/failure events.
+        Events are sent as signed JSON payloads.
+      operationId: setWebhookConfig
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookConfig"
+      responses:
+        "200":
+          description: Webhook config saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookConfigResponse"
+        "422":
+          description: Invalid URL or SSRF check failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    get:
+      tags: [Webhooks]
+      summary: Get webhook config
+      description: Retrieve the current webhook configuration for your client.
+      operationId: getWebhookConfig
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Webhook config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookConfigResponse"
+        "404":
+          description: No webhook configured
+
+    delete:
+      tags: [Webhooks]
+      summary: Delete webhook config
+      description: Remove the webhook configuration for your client.
+      operationId: deleteWebhookConfig
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "204":
+          description: Webhook config deleted
+        "404":
+          description: No webhook configured
+
+  /api/v1/webhooks/deliveries:
+    get:
+      tags: [Webhooks]
+      summary: List webhook deliveries
+      description: |
+        List webhook delivery attempts for your client.
+        Optionally filter by `job_id` or `status`.
+      operationId: listWebhookDeliveries
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by job ID
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [success, failed, retrying]
+          description: Filter by delivery status
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Delivery list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookDelivery"
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+  /api/v1/webhooks/deliveries/retry:
+    post:
+      tags: [Webhooks]
+      summary: Retry failed webhook deliveries
+      description: Manually trigger a retry of all failed webhook deliveries for your client.
+      operationId: retryFailedDeliveries
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Retry triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  retried:
+                    type: integer
+                    description: Number of deliveries retried
+
+  # Client Keys ───────────────────────────────────────────────────────
+  /api/v1/client/key:
+    post:
+      tags: ["Client"]
+      summary: Generate an API key
+      description: |
+        Creates a persistent API key bound to your `client_id`.
+        Store it securely — it grants full access to your jobs and can replace
+        the `X-Client-ID` header on all subsequent requests.
+
+        **This is your "Sign up" equivalent.** Call this endpoint first to get
+        an API key for all future requests.
+      operationId: generateApiKey
+      security:
+        - ClientId: []
+      parameters:
+        - name: X-Client-ID
+          in: header
+          schema:
+            type: string
+          required: true
+          description: Temporary client identifier (or generate one by omitting it)
+      responses:
+        "200":
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyResponse"
+
+# ── Tags ─────────────────────────────────────────────────────────────
+tags:
+  - name: Root
+    description: API root and discovery endpoints
+  - name: Health
+    description: Health check endpoint
+  - name: Search
+    description: Asynchronous .onion site search
+  - name: Capture
+    description: Full .onion site WARC archiving
+  - name: Screenshots
+    description: Viewport screenshots of .onion pages
+  - name: Jobs
+    description: Job lifecycle management
+  - name: Webhooks
+    description: Webhook notification configuration
+  - name: Client
+    description: API key and client management
