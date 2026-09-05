@@ -1,0 +1,296 @@
+# Dependencies — auto-merge to `deps`, gated by tests, then promote to `main`.
+#
+# Runs the day after each Dependabot batch (see .github/dependabot.yml):
+#   1. Creates the `deps` branch from `main` if it does not exist.
+#   2. Squash-merges every green Dependabot PR whose base is `deps`.
+#   3. If anything was merged, runs the real test suite on the updated
+#      `deps` head (same commands as ci-tests.yml).
+#   4. If tests pass, opens/updates a PR `deps -> main` and squash-merges it.
+#      (Note: merging to main triggers deploy-live.yml as usual.)
+#   5. If any PR could not be merged (conflict, red/pending checks) or the
+#      test suite fails, opens or updates a GitHub issue labeled
+#      `dependencies-merge-blocked` with the details. The issue is closed
+#      automatically on the next fully green run.
+#
+# Can also be triggered manually from the Actions tab (workflow_dispatch).
+name: Dependencies — auto-merge
+
+on:
+  schedule:
+    # The day after each Dependabot run (1st and 15th), 09:00 UTC.
+    - cron: "0 9 2,16 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: deps-auto-merge
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: deps
+      LABEL: dependencies-merge-blocked
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure `deps` branch exists
+        run: |
+          set -euo pipefail
+          if git ls-remote --heads origin "$BRANCH" | grep -q "refs/heads/$BRANCH"; then
+            echo "Branch '$BRANCH' already exists."
+          else
+            echo "Branch '$BRANCH' missing — creating it from main (via API, robust on shallow checkouts)."
+            main_sha=$(git ls-remote origin refs/heads/main | cut -f1)
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/heads/$BRANCH" \
+              -f sha="$main_sha"
+          fi
+
+      - name: Merge green Dependabot PRs into `deps`
+        id: merge
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          blocked=""
+          merged_any="false"
+
+          # Collect open Dependabot PRs targeting `deps`.
+          prs=$(gh pr list \
+            --base "$BRANCH" \
+            --author "app/dependabot" \
+            --state open \
+            --json number,title,mergeable,mergeStateStatus \
+            --limit 50)
+
+          echo "Open Dependabot PRs:"
+          echo "$prs"
+
+          n=$(echo "$prs" | jq 'length')
+          for i in $(seq 0 $((n - 1))); do
+            num=$(echo "$prs" | jq -r ".[$i].number")
+            mergeable=$(echo "$prs" | jq -r ".[$i].mergeable")
+            state=$(echo "$prs" | jq -r ".[$i].mergeStateStatus")
+            title=$(echo "$prs" | jq -r ".[$i].title")
+
+            echo "::group::PR #$num — $title (mergeable=$mergeable, state=$state)"
+
+            # Conflict check (mergeable: MERGEABLE | CONFLICTING | UNKNOWN).
+            if [ "$mergeable" != "MERGEABLE" ]; then
+              echo "Not mergeable (mergeable=$mergeable) — marking blocked."
+              blocked="${blocked}- PR #${num} (${title}): merge conflict with the deps branch — Dependabot should rebase it automatically on its next run."$'\n'
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Merge-state check.
+            case "$state" in
+              CLEAN|HAS_HOOKS)
+                : ;;
+              BEHIND)
+                echo "PR is behind — requesting branch update."
+                gh pr update-branch "$num" --repo "$GITHUB_REPOSITORY" || true
+                blocked="${blocked}- PR #${num} (${title}): not up to date with the ${BRANCH} branch (state: ${state}) — will be retried next run."$'\n'
+                echo "::endgroup::"
+                continue
+                ;;
+              BLOCKED|UNSTABLE)
+                blocked="${blocked}- PR #${num} (${title}): required checks failing or missing (state: ${state}) — see the PR checks tab."$'\n'
+                echo "::endgroup::"
+                continue
+                ;;
+              *)
+                blocked="${blocked}- PR #${num} (${title}): not mergeable (state: ${state})."$'\n'
+                echo "::endgroup::"
+                continue
+                ;;
+            esac
+
+            # All reported checks must exist and be green before merging.
+            checks_out=$(gh pr checks "$num" --repo "$GITHUB_REPOSITORY" 2>&1) && checks_rc=0 || checks_rc=$?
+            if [ "$checks_rc" -eq 0 ] && ! grep -qiE "no (required )?checks" <<< "$checks_out"; then
+              echo "All checks green — squash-merging."
+              if gh pr merge "$num" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+                merged_any="true"
+              else
+                blocked="${blocked}- PR #${num} (${title}): merge command failed (see workflow logs)."$'\n'
+              fi
+            else
+              echo "Checks failing, pending, or absent — marking blocked."
+              echo "$checks_out"
+              blocked="${blocked}- PR #${num} (${title}): CI checks failing, pending, or not reported (the ci-tests workflow must run on PRs targeting the ${BRANCH} branch)."$'\n'
+            fi
+            echo "::endgroup::"
+          done
+
+          {
+            echo "merged_any=${merged_any}"
+            echo "blocked<<BLOCKED_EOF"
+            echo "${blocked:-none}"
+            echo "BLOCKED_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Merged anything: $merged_any"
+          echo "Blocked list:"
+          echo "${blocked:-none}"
+
+      - name: Run test suite on `deps` (if anything merged)
+        id: tests
+        if: steps.merge.outputs.merged_any == 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH"
+          git checkout "$BRANCH"
+          git pull --ff-only origin "$BRANCH"
+
+          docker compose build api
+
+          set +e
+          docker compose run --rm api python -m pytest tests/ -v
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "tests_result=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "tests_result=passed" >> "$GITHUB_OUTPUT"
+
+      - name: Promote `deps` -> `main` (tests passed)
+        if: steps.merge.outputs.merged_any == 'true' && steps.tests.outputs.tests_result == 'passed'
+        run: |
+          set -euo pipefail
+
+          # Reuse an existing open PR from deps to main, or create one.
+          existing=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            echo "Reusing existing PR #$existing (deps -> main)."
+            pr_num="$existing"
+          else
+            pr_num=$(gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(deps): biweekly dependency update train" \
+              --body "Automated biweekly promotion of the deps branch: all Dependabot updates merged and the test suite passed on the deps head." \
+              --repo "$GITHUB_REPOSITORY" | grep -oE '[0-9]+$' | tail -1)
+            echo "Created PR #$pr_num (deps -> main)."
+          fi
+
+          # Wait for checks on the promotion PR only if any are reported
+          # (e.g. once branch protection or required checks are configured).
+          has_checks=$(gh pr view "$pr_num" --repo "$GITHUB_REPOSITORY" \
+            --json statusCheckRollup --jq '(.statusCheckRollup | length) > 0')
+          if [ "$has_checks" = "true" ]; then
+            gh pr checks "$pr_num" --repo "$GITHUB_REPOSITORY" --watch --fail-fast
+          else
+            echo "No checks reported on the promotion PR — the test suite already passed on the identical deps head."
+          fi
+
+          gh pr merge "$pr_num" --repo "$GITHUB_REPOSITORY" --squash
+
+      - name: Notify — open or update blocked issue
+        # Runs when the job failed anywhere (including infra errors before
+        # the merge step), OR when the job succeeded but some Dependabot
+        # PRs could not be merged (partial success).
+        if: >-
+          ${{
+            failure() ||
+            (steps.merge.outcome != 'skipped' && steps.merge.outputs.blocked != 'none')
+          }}
+        env:
+          BLOCKED: ${{ steps.merge.outputs.blocked }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Build the reason. Note: no backticks anywhere here — this text is
+          # interpolated into an unquoted heredoc below.
+          reason="one or more Dependabot PRs could not be merged"
+          if [ "$TESTS_OUTCOME" = "failure" ]; then
+            reason="the test suite failed on the updated ${BRANCH} head"
+          elif [ "$BLOCKED" = "none" ] || [ -z "$BLOCKED" ]; then
+            reason="workflow infrastructure error — see the run logs"
+          fi
+
+          if [ "$BLOCKED" = "none" ] || [ -z "$BLOCKED" ]; then
+            blocked_section="(no specific PR details — see run logs)"
+          else
+            blocked_section="$BLOCKED"
+          fi
+
+          body=$(cat <<EOF
+          ## ⛔ Dependency update train could not complete cleanly
+
+          **Run:** ${RUN_URL}
+          **Reason:** ${reason}
+          **When:** $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          ### Blocked PRs
+          ${blocked_section}
+
+          ### What happens next
+          - Merge conflicts: Dependabot rebases automatically; this will be retried on the next scheduled batch (or trigger it manually via workflow_dispatch).
+          - Test failures: fix locally on a branch based on ${BRANCH}, or close the offending Dependabot PR and let the next batch retry without it.
+          - This issue closes automatically on the next fully green run.
+
+          _Maintained automatically by the deps-auto-merge workflow — one issue per failure streak._
+          EOF
+          )
+
+          # Ensure the label exists (creates it if missing, updates if present).
+          gh label create "$LABEL" \
+            --repo "$GITHUB_REPOSITORY" \
+            --color D93F0B \
+            --description "Biweekly dependency merge could not complete" \
+            --force
+
+          # Reuse an open issue with the label, else create one.
+          issue_num=$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --label "$LABEL" \
+            --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$issue_num" ]; then
+            gh issue comment "$issue_num" --repo "$GITHUB_REPOSITORY" --body "$body"
+            echo "Updated existing issue #$issue_num"
+          else
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --label "$LABEL" \
+              --title "⛔ Dependency update train blocked — $(date -u '+%Y-%m-%d')" \
+              --body "$body"
+            echo "Created new blocked issue"
+          fi
+
+      - name: Close blocked issue on fully green run
+        if: success() && steps.merge.outputs.blocked == 'none'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          issue_num=$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --label "$LABEL" \
+            --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$issue_num" ]; then
+            gh issue close "$issue_num" \
+              --repo "$GITHUB_REPOSITORY" \
+              --comment "✅ Dependency update train completed successfully on run ${RUN_URL} — closing this issue."
+            echo "Closed issue #$issue_num"
+          else
+            echo "No open blocked issue to close."
+          fi

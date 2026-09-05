@@ -1,0 +1,56 @@
+# Dependabot — automated dependency updates
+#
+# What this does:
+#   - Checks for outdated pip, Docker, and GitHub Actions dependencies
+#     twice a month (1st and 15th at 03:00 UTC).
+#   - Groups all updates per ecosystem into a single consolidated PR
+#     ("update all dependencies") instead of one PR per package.
+#   - Opens its pull requests against the dedicated `deps` branch, NOT
+#     against main. `deps` is created from main by the merge workflow
+#     (.github/workflows/deps-auto-merge.yml) if it does not exist yet.
+#   - The merge workflow then runs the test suite on `deps` and promotes
+#     it to main only when everything is green.
+#
+# Notes:
+#   - Exact 14-day cadence is not expressible in Dependabot schedules;
+#     "1st and 15th of each month" is the closest approximation.
+#   - Security-update PRs always target the default branch (main),
+#     regardless of target-branch. That is intentional: CVE fixes
+#     should not wait for the biweekly train.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "cron"
+      cronjob: "0 3 1,15 * *"
+    target-branch: "deps"
+    labels: ["dependencies"]
+    open-pull-requests-limit: 5
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "cron"
+      cronjob: "0 3 1,15 * *"
+    target-branch: "deps"
+    labels: ["dependencies"]
+    open-pull-requests-limit: 5
+    groups:
+      docker-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "cron"
+      cronjob: "0 3 1,15 * *"
+    target-branch: "deps"
+    labels: ["dependencies"]
+    open-pull-requests-limit: 5
+    groups:
+      actions-deps:
+        patterns: ["*"]

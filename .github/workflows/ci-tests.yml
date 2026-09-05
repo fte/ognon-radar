@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # `deps` so Dependabot update PRs (which target the dedicated deps
+    # branch) are tested before the deps-auto-merge workflow promotes them.
+    branches: [main, deps]
   workflow_dispatch:
 
 jobs:
