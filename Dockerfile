@@ -6,12 +6,12 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     curl \
     libxml2-dev \
     libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
-    
 # Copy requirements first for better layer caching
 COPY requirements.txt .
 
