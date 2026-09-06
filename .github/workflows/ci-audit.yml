@@ -40,12 +40,21 @@ jobs:
         # (exit 1), not just when it crashes. pip-audit resolves transitive
         # dependencies fresh (like a clean install), so it audits what a new
         # deployment would actually get, not a stale environment.
+        #
+        # Accepted risk (added 2026-09-06, review when nltk > 3.10.3 ships):
+        #   --ignore-vuln PYSEC-2026-3740 — nltk file-sandbox bypass in model
+        #   import/export APIs. No patched release exists yet (nltk 3.10.3 is
+        #   the latest). Only exploitable when untrusted callers choose NLTK
+        #   model paths with pathsec enforcement on; this app only loads
+        #   bundled NLTK data, never caller-supplied model paths.
+        #   REMOVE THIS FLAG as soon as nltk publishes a fix.
         run: |
           set -o pipefail
           python -m pip_audit \
             --requirement "${{ matrix.reqfile }}" \
             --desc on \
             --timeout 30 \
+            --ignore-vuln PYSEC-2026-3740 \
             --format markdown \
             | tee pip-audit-report.md
 
