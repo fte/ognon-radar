@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, deps]
   schedule:
     # Daily scan at 06:00 UTC — catches newly published CVEs
     - cron: "0 6 * * *"
@@ -33,52 +33,31 @@ jobs:
           cache-dependency-path: ${{ matrix.reqfile }}
 
       - name: Install pip-audit
-        run: python -m pip install --upgrade pip-audit
+        run: python -m pip install --upgrade pip pip-audit
 
       - name: Audit ${{ matrix.reqfile }}
-        id: audit
-        # Capture stdout+stderr but let the step fail naturally on errors.
-        continue-on-error: true
+        # pipefail so the job fails when pip-audit finds vulnerabilities
+        # (exit 1), not just when it crashes. pip-audit resolves transitive
+        # dependencies fresh (like a clean install), so it audits what a new
+        # deployment would actually get, not a stale environment.
         run: |
           set -o pipefail
-          echo "::group::pip-audit output"
-          pip-audit \
+          python -m pip_audit \
             --requirement "${{ matrix.reqfile }}" \
             --desc on \
             --timeout 30 \
-            --format sarif 2>&1 | tee pip-audit-output.sarif
-          exit_code="${PIPESTATUS[0]}"
-          echo "::endgroup::"
-
-          # pip-audit exits 0 = no vulns, 1 = vulns found, other = error.
-          # We capture exit code for post-processing; the SARIF file has
-          # the structured data regardless.
-          echo "pip-audit exit code: ${exit_code}"
-          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
-
-      - name: Parse and report vulnerabilities
-        id: report
-        # Run even if the audit step failed (e.g. network timeout on advisory DB).
-        # scripts/pip_audit_report.py handles a missing/invalid SARIF file
-        # gracefully (treats it as "no findings") so a transient pip-audit
-        # crash doesn't block CI.
-        if: always() && steps.audit.outcome != 'skipped'
-        env:
-          REQFILE: ${{ matrix.reqfile }}
-          AUDIT_EXIT: ${{ steps.audit.outputs.exit_code }}
-        run: python3 scripts/pip_audit_report.py pip-audit-output.sarif
-
-      - name: Upload pip-audit SARIF report
-        if: always() && steps.audit.outcome != 'skipped' && hashFiles('pip-audit-output.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: pip-audit-output.sarif
-          category: pip-audit-${{ matrix.reqfile }}
+            --format markdown \
+            | tee pip-audit-report.md
 
       - name: Summarize to job summary
-        if: always() && steps.audit.outcome != 'skipped' && hashFiles('pip-audit-output.sarif') != ''
-        env:
-          REQFILE: ${{ matrix.reqfile }}
+        if: always()
         run: |
-          echo "## 📦 pip-audit report — ${REQFILE}" >> "$GITHUB_STEP_SUMMARY"
-          python3 scripts/pip_audit_report.py pip-audit-output.sarif --summary >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## 📦 pip-audit report — ${{ matrix.reqfile }}"
+            echo
+            if [ -s pip-audit-report.md ]; then
+              cat pip-audit-report.md
+            else
+              echo "⚠️ No audit output produced (pip-audit crashed before writing the report)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
