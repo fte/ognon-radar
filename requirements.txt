@@ -4,13 +4,11 @@ uvicorn[standard]>=0.30,<1.0
 pydantic>=2.10,<3.0
 
 # Configuration
-PyYAML==6.0.1
+PyYAML==6.0.3
 
 # HTML parsing
-# HTML parsing
 beautifulsoup4==4.12.3
--lxml==5.1.0
-+lxml>=6.0,<7.0
+lxml>=6.0,<7.0
 
 # Web archive capture
 warcio==1.7.4
