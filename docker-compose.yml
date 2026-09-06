@@ -19,16 +19,27 @@ services:
           --MaxCircuitDirtiness 60
     environment:
       TOR_CONTROL_PASSWORD: ${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}
+      # Read by the image's built-in healthcheck probe to authenticate against
+      # the control port. Our custom entrypoint (below) does not write the
+      # /run/tor/healthcheck.env file the probe normally reads, so the probe
+      # needs this env var to use the same password we hash for Tor.
+      PASSWORD: ${TOR_CONTROL_PASSWORD:-ognon-radar-ctrl}
     ports:
       - "9050:9050"  # SOCKS5 proxy
     networks:
       - darkweb-net
+    # Use the image's built-in healthcheck script: it authenticates against the
+    # Tor control port, which proves Tor is actually up and reachable. It makes
+    # no external request, so it never fails just because a circuit is slow to
+    # build — unlike an HTTPS-through-Tor probe, which caused flaky CI failures
+    # ("dependency failed to start: container darkweb-tor is unhealthy") when
+    # bootstrap took longer than the probe budget.
     healthcheck:
-      test: ["CMD", "curl", "--socks5-hostname", "localhost:9050", "--fail", "https://check.torproject.org/"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   # FastAPI application
   api:

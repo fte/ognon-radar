@@ -12,6 +12,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Hard ceiling so a hung container can never eat the runner's 6h limit
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -23,4 +25,16 @@ jobs:
       - name: Run tests
         run: |
           # The Tor container starts automatically via depends_on.
+          #
+          # Retry once on failure: Tor bootstrap on a fresh runner can be slow
+          # or hit a transient network hiccup. The tor service healthcheck no
+          # longer requires an external HTTPS request (see docker-compose.yml),
+          # but a clean-slate retry keeps the deps auto-merge train immune to
+          # any remaining one-off infra flake. A genuinely failing test suite
+          # fails twice and still goes red.
+          if docker compose run --rm api python -m pytest tests/ -v; then
+            exit 0
+          fi
+          echo "::warning::Test run failed — retrying once after a clean compose down"
+          docker compose down --volumes --remove-orphans
           docker compose run --rm api python -m pytest tests/ -v
