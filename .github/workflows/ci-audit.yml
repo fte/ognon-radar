@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, deps]
   schedule:
     # Daily scan at 06:00 UTC — catches newly published CVEs
     - cron: "0 6 * * *"
@@ -33,163 +33,40 @@ jobs:
           cache-dependency-path: ${{ matrix.reqfile }}
 
       - name: Install pip-audit
-        run: python -m pip install --upgrade pip-audit
+        run: python -m pip install --upgrade pip pip-audit
 
       - name: Audit ${{ matrix.reqfile }}
-        id: audit
-        # Capture stdout+stderr but let the step fail naturally on errors.
-        # We post-process the SARIF output separately.
-        continue-on-error: true
+        # pipefail so the job fails when pip-audit finds vulnerabilities
+        # (exit 1), not just when it crashes. pip-audit resolves transitive
+        # dependencies fresh (like a clean install), so it audits what a new
+        # deployment would actually get, not a stale environment.
+        #
+        # Accepted risk (added 2026-09-06, review when nltk > 3.10.3 ships):
+        #   --ignore-vuln PYSEC-2026-3740 — nltk file-sandbox bypass in model
+        #   import/export APIs. No patched release exists yet (nltk 3.10.3 is
+        #   the latest). Only exploitable when untrusted callers choose NLTK
+        #   model paths with pathsec enforcement on; this app only loads
+        #   bundled NLTK data, never caller-supplied model paths.
+        #   REMOVE THIS FLAG as soon as nltk publishes a fix.
         run: |
           set -o pipefail
-          echo "::group::pip-audit output"
-          pip-audit \
+          python -m pip_audit \
             --requirement "${{ matrix.reqfile }}" \
             --desc on \
             --timeout 30 \
-            --format sarif 2>&1 | tee pip-audit-output.sarif
-          exit_code="${PIPESTATUS[0]}"
-          echo "::endgroup::"
-
-          # pip-audit exits 0 = no vulns, 1 = vulns found, other = error.
-          # We capture exit code for post-processing; the SARIF file has
-          # the structured data regardless.
-          echo "pip-audit exit code: ${exit_code}"
-          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
-
-      - name: Parse and report vulnerabilities
-        id: report
-        # Run even if the audit step failed (e.g. network timeout on advisory DB)
-        if: always() && steps.audit.outcome != 'skipped'
-        run: |
-          REQFILE="${{ matrix.reqfile }}"
-          SARIF_FILE="pip-audit-output.sarif"
-
-          # If no SARIF file was produced (e.g. pip-audit crashed), bail early
-          # without failing the build — a transient infra issue shouldn't block CI.
-          if [[ ! -f "$SARIF_FILE" ]]; then
-            echo "⚠️  No SARIF output produced — pip-audit may have crashed."
-            echo "skip_reason=no_sarif_output" >> "$GITHUB_OUTPUT"
-            echo "has_vulnerabilities=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          python3 << 'PYEOF'
-          import json, sys, os
-
-          sarif_path = "pip-audit-output.sarif"
-          reqfile = os.environ.get("REQFILE", "?")
-          audit_exit = int(os.environ.get("AUDIT_EXIT", "0"))
-
-          with open(sarif_path) as f:
-            sarif = json.load(f)
-
-          # SARIF structure: runs[0].results[] = each finding
-          runs = sarif.get("runs", [])
-          results = runs[0].get("results", []) if runs else []
-
-          if not results:
-            print(f"✅ No vulnerabilities found in {reqfile}.")
-            with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
-              gh.write("has_vulnerabilities=false\n")
-              gh.write("vuln_count=0\n")
-            sys.exit(0)
-
-          print(f"Found {len(results)} known vulnerabilities in {reqfile}:")
-          high_critical = 0
-          medium = 0
-          low_info = 0
-
-          for r in results:
-            # Extract package name from SARIF artifact location
-            locations = r.get("locations", [])
-            if locations:
-              artifact = locations[0].get("physicalLocation", {}).get("artifactLocation", {})
-              pkg = artifact.get("uri", "?")
-            else:
-              pkg = "?"
-
-            # Get version from the message
-            msg = r.get("message", {}).get("text", "")
-
-            # Vulnerability ID
-            rule_id = r.get("ruleId", "?")
-
-            # Severity from the rule's properties
-            rule = runs[0].get("tool", {}).get("driver", {}).get("rules", [])
-            sev = None
-            for ru in rule:
-              if ru.get("id") == rule_id:
-                props = ru.get("properties", {})
-                sev = props.get("security-severity")
-
-            if sev is not None:
-              try:
-                sev = float(sev)
-              except (ValueError, TypeError):
-                sev = None
-
-            if sev is not None and sev >= 7.0:
-              flag = "❌ FAIL"
-              high_critical += 1
-            elif sev is not None and sev >= 4.0:
-              flag = "⚠️ WARN"
-              medium += 1
-            else:
-              flag = "ℹ️ INFO"
-              low_info += 1
-
-            print(f"  {flag} {rule_id} — {pkg} (severity: {sev or 'N/A'})")
-            print(f"         {msg[:200]}")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
-            gh.write(f"has_vulnerabilities=true\n")
-            gh.write(f"vuln_count={len(results)}\n")
-            gh.write(f"high_critical={high_critical}\n")
-            gh.write(f"medium={medium}\n")
-            gh.write(f"low_info={low_info}\n")
-
-          if high_critical > 0:
-            print(f"\n❌ {high_critical} High/Critical severity vulnerabilities found — failing build.")
-            sys.exit(1)
-          else:
-            print(f"\n✅ No high/critical vulnerabilities. {medium} medium, {low_info} low/info.")
-            sys.exit(0)
-
-          PYEOF
-        env:
-          REQFILE: ${{ matrix.reqfile }}
-          AUDIT_EXIT: ${{ steps.audit.outputs.exit_code }}
-
-      - name: Upload pip-audit SARIF report
-        if: always() && steps.audit.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: pip-audit-output.sarif
-          category: pip-audit-${{ matrix.reqfile }}
+            --ignore-vuln PYSEC-2026-3740 \
+            --format markdown \
+            | tee pip-audit-report.md
 
       - name: Summarize to job summary
-        if: always() && steps.audit.outcome != 'skipped'
+        if: always()
         run: |
-          REQFILE="${{ matrix.reqfile }}"
-          SARIF="pip-audit-output.sarif"
-          echo "## 📦 pip-audit report — ${REQFILE}" >> "$GITHUB_STEP_SUMMARY"
-
-          # Extract a human-readable summary from the SARIF
-          if [[ -f "$SARIF" ]]; then
-            python3 -c "
-import json
-with open('${SARIF}') as f:
-    sarif = json.load(f)
-results = (sarif.get('runs') or [{}])[0].get('results') or []
-if not results:
-    print('✅ No vulnerabilities found.')
-else:
-    for r in results:
-        rule_id = r.get('ruleId', '?')
-        msg = r.get('message', {}).get('text', '?')
-        print(f\"- **{rule_id}**: {msg[:200]}\")
-" >> "$GITHUB_STEP_SUMMARY"
-          else:
-            echo "⚠️  No SARIF output produced (pip-audit may have crashed)." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "## 📦 pip-audit report — ${{ matrix.reqfile }}"
+            echo
+            if [ -s pip-audit-report.md ]; then
+              cat pip-audit-report.md
+            else
+              echo "⚠️ No audit output produced (pip-audit crashed before writing the report)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
