@@ -109,6 +109,12 @@ class Settings:
         self.capture_max_pages: int = capture_config.get('max_pages', 50)
         self.capture_max_size_mb: int = capture_config.get('max_size_mb', 500)
 
+        # SERP reachability probing (per search-results page)
+        serp_config = config.get('serp_probing', {})
+        self.serp_probe_budget: float = serp_config.get('budget_seconds', 6.0)
+        self.serp_probe_connect_timeout: float = serp_config.get('connect_timeout', 5.0)
+        self.serp_probe_max_workers: int = serp_config.get('max_workers', 5)
+
 
 # Global settings instance
 settings = Settings(os.getenv('APP_CONFIG_PATH', 'config.yaml'))

@@ -68,6 +68,16 @@ capture:
   max_pages: 50              # Hard server-side cap on pages per capture job
   max_size_mb: 500           # Hard server-side cap on WARC file size
 
+# SERP Reachability Probing
+# When a search-engine page is parsed, each result URL is probed through Tor
+# before being surfaced. budget_seconds is a hard wall-clock cap per SERP page:
+# past it, queued probes are cancelled and in-flight ones are abandoned (those
+# results are surfaced unfiltered rather than dropped).
+serp_probing:
+  budget_seconds: 6.0        # Per-page wall-clock budget for all probes
+  connect_timeout: 5.0       # Per-probe Tor connect timeout (was 15s)
+  max_workers: 5             # Concurrent probes per SERP page
+
 # Job Queue Settings
 jobs:
   max_workers: 2         # Concurrent crawl threads
