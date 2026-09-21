@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote as url_quote
 from datetime import datetime, timezone
@@ -417,18 +417,49 @@ class OnionCrawler:
                     # On a search engine page: extract SERP entries directly
                     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                     entries = serp_parser(soup)
-                    # Filter out unreachable .onion sites in parallel before surfacing results
-                    with ThreadPoolExecutor(max_workers=5) as pool:
-                        reachable = list(pool.map(
-                            lambda e: self.tor_client.check_reachable(e['url']),
-                            entries,
-                        ))
-                    skipped = sum(1 for r in reachable if not r)
-                    if skipped:
-                        logger.info(f"SERP: skipped {skipped}/{len(entries)} unreachable results from {current_url}")
-                    for entry, is_up in zip(entries, reachable):
-                        if not is_up:
-                            continue
+                    # Filter out unreachable .onion sites in parallel before surfacing results.
+                    # Stop as soon as max_results reachable entries are found — a popular term
+                    # can yield 100+ SERP entries, and reachability-checking every one through
+                    # Tor would delay results by minutes for no benefit.
+                    reachable_entries: List[Tuple[int, Dict[str, str]]] = []
+                    needed = max_results - len(results)
+                    if needed > 0:
+                        pool = ThreadPoolExecutor(max_workers=5)
+                        try:
+                            futures = {
+                                pool.submit(self.tor_client.check_reachable, e['url']): (i, e)
+                                for i, e in enumerate(entries)
+                            }
+                            try:
+                                for fut in as_completed(futures, timeout=30):
+                                    i, entry = futures[fut]
+                                    try:
+                                        is_up = fut.result()
+                                    except Exception:
+                                        is_up = False
+                                    if not is_up:
+                                        continue
+                                    reachable_entries.append((i, entry))
+                                    if len(reachable_entries) >= needed:
+                                        for other in futures:
+                                            other.cancel()
+                                        break
+                            except TimeoutError:
+                                # A few hung Tor circuits (SOCKS connect timeouts
+                                # are not reliably enforced by httpx) must not
+                                # stall the whole search — give up on the rest.
+                                for other in futures:
+                                    other.cancel()
+                        finally:
+                            # Never block on hung workers; stragglers finish in
+                            # the background and their threads die on their own.
+                            pool.shutdown(wait=False, cancel_futures=True)
+                        reachable_entries.sort()
+                        checked = len(entries) - sum(1 for f in futures if f.cancelled())
+                        skipped = checked - len(reachable_entries)
+                        if skipped:
+                            logger.info(f"SERP: skipped {skipped}/{checked} checked results from {current_url}")
+                    for _, entry in reachable_entries:
                         results.append({
                             'url': entry['url'],
                             'title': entry['title'],

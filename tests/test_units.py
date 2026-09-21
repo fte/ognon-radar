@@ -5,6 +5,7 @@ These tests run without Docker or a live Tor connection.
 They use tmp_path-backed SQLite and mock HTTP calls.
 """
 import json
+import threading
 import time
 from unittest.mock import MagicMock, patch, call
 
@@ -293,6 +294,59 @@ class TestSERPReachabilityFilter:
             _VALID_ONION_B: False,
         })
         assert self._run(crawler) == []
+
+    def test_serp_stops_checking_once_max_results_reached(self, _patch_config):
+        """
+        With a large SERP, reachability checks stop early once max_results
+        reachable entries are found — the remaining entries are never probed.
+        (Previously every SERP entry was checked through Tor, which delayed
+        results by minutes for popular terms.)
+        """
+        from core.crawler import OnionCrawler
+
+        onions = [f"http://{chr(97 + i) * 56}.onion" for i in range(20)]
+        reachable = set(onions[:2])
+        html = (
+            "<html><body>"
+            + "".join(
+                f'<div class="result"><a class="result__a" href="/?uddg={u}">Site {i}</a></div>'
+                for i, u in enumerate(onions)
+            )
+            + "</body></html>"
+        )
+
+        tor = MagicMock()
+        resp = MagicMock()
+        resp.text = html
+        resp.raise_for_status = MagicMock()
+        tor.get_with_retries.return_value = resp
+
+        # Unreachable entries block until the timer fires so the executor's
+        # shutdown(wait=True) never hangs if they are already running.
+        release = threading.Event()
+        threading.Timer(1.0, release.set).start()
+
+        def check(url: str) -> bool:
+            if url in reachable:
+                return True
+            release.wait(10)
+            return False
+
+        tor.check_reachable.side_effect = check
+
+        crawler = OnionCrawler(tor)
+        results, _ = crawler.crawl_and_search(
+            start_url=f"http://{_DDG_HOST}",
+            search_term="anything",
+            max_depth=1,
+            max_pages=5,
+            max_results=2,
+            timeout=10,
+        )
+
+        assert len(results) == 2
+        # Early exit: only the first few entries get probed, never all 20.
+        assert tor.check_reachable.call_count < len(onions)
 
 
 # ── WebhookManager ───────────────────────────────────────────────────
