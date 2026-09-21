@@ -3,13 +3,17 @@ Screenshot capture via Playwright + Tor SOCKS5 proxy.
 Uses the synchronous API to stay compatible with the threaded job executor.
 """
 import logging
+import os
 from pathlib import Path
 from types import TracebackType
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_PROXY = {"server": "socks5://tor:9050"}
+# TOR_PROXY is set by scripts/container to tor's real IP (the vmnet network
+# does not resolve container names); default matches config.yaml's value and
+# only works under Docker's embedded DNS.
+_PROXY = {"server": os.getenv("TOR_PROXY", "socks5://tor:9050")}
 _LAUNCH_ARGS = [
     "--disable-dev-shm-usage",
     "--no-sandbox",               # Required in Docker — Chrome sandbox requires kernel support absent in containers

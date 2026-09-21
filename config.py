@@ -38,9 +38,13 @@ class Settings:
         
         # Tor Configuration
         tor_config = config.get('tor', {})
-        self.tor_proxy: str = tor_config.get('proxy', 'socks5h://tor:9050')
+        # Prefer TOR_PROXY / TOR_CONTROL_HOST env vars. The scripts/container
+        # backend sets them to tor's real IP because Apple's vmnet network does
+        # not resolve container names; the `tor:9050` YAML default only works
+        # under Docker's embedded DNS. Falls back to the YAML value otherwise.
+        self.tor_proxy: str = os.getenv('TOR_PROXY', '') or tor_config.get('proxy', 'socks5h://tor:9050')
         self.tor_check_url: str = tor_config.get('check_url', 'https://check.torproject.org/')
-        self.tor_control_host: str = tor_config.get('control_host', 'tor')
+        self.tor_control_host: str = os.getenv('TOR_CONTROL_HOST', '') or tor_config.get('control_host', 'tor')
         self.tor_control_port: int = tor_config.get('control_port', 9051)
         # Prefer TOR_CONTROL_PASSWORD env var (set in docker-compose.yml).
         # Falls back to config value — which should be kept empty in tracked files.
