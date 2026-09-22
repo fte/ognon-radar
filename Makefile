@@ -71,7 +71,7 @@ else
   CLEAN_CMD    := $(DOCKER_COMPOSE) down -v
 endif
 
-.PHONY: up up-build down logs logs-tor restart ps shell test crawler locust clean runtime openapi help _guard-runtime
+.PHONY: up up-build down logs logs-tor restart ps shell test crawler locust clean runtime openapi openapi-check help _guard-runtime
 
 # Fail fast with guidance when no container backend (or compose runner) is available.
 _guard-runtime:
@@ -139,6 +139,15 @@ runtime:                    ## Show the detected container backend
 openapi:                    ## Regenerate openapi.json + openapi.yaml from the FastAPI app
 	@if python3 -c 'import fastapi' >/dev/null 2>&1; then \
 		python3 scripts/gen_openapi.py; \
+	else \
+		echo "fastapi is not installed in the host python."; \
+		echo "Run this inside the API container (make shell) or a venv with requirements installed."; \
+		exit 1; \
+	fi
+
+openapi-check:              ## Verify openapi.json + openapi.yaml match the app (also runs in CI)
+	@if python3 -c 'import fastapi' >/dev/null 2>&1; then \
+		python3 scripts/gen_openapi.py --check; \
 	else \
 		echo "fastapi is not installed in the host python."; \
 		echo "Run this inside the API container (make shell) or a venv with requirements installed."; \

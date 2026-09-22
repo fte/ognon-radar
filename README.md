@@ -130,6 +130,55 @@ crawling:
 
 Customize by editing `config.yaml` before running `docker-compose up`
 
+## 🔐 Authentication & Client Identity
+
+The API is **intentionally public** — every endpoint (search, capture,
+screenshot, webhooks) can be called without an account, so only put
+public-facing data in jobs and results. CORS is `*` by design and the rationale
+is documented on the `public-api` OpenAPI tag.
+
+Requests are scoped to a **client** through two optional header credentials,
+both declared as `securitySchemes` in the generated OpenAPI contract:
+
+| Header | Role | Semantics |
+|--------|------|-----------|
+| `X-Client-ID` | Client identity | A bearer token you generate locally (the web client keeps one in `localStorage`). Whoever holds it can read that client's jobs, captures, screenshots, and webhooks — treat it as a credential. |
+| `X-API-Key` | Optional escalation | A persistent per-client key minted via `POST /api/v1/client/key` that replaces `X-Client-ID` on later requests. When the deployment sets `security.api_key`, a matching key is required and additionally grants **admin** (cross-client) access. |
+
+Security-model notes:
+
+- **Optional, not required**: the contract lists both schemes with `security: []`
+  at the root, and `core/auth.py` only enforces them when a key is configured.
+- **Dev default**: `security.api_key` is empty in the default `config.yaml`,
+  which *disables API-key enforcement*. Set it in `config.live.yaml` (or via an
+  environment override) before exposing the service publicly.
+- **Streams**: SSE endpoints accept an ephemeral `?token=` minted by
+  `POST /api/v1/jobs/{id}/stream-token` instead of headers — never pass
+  `X-Client-ID`/`X-API-Key` as query parameters (they leak into logs and
+  browser history).
+- **Webhooks**: deliveries are signed with `X-Webhook-Signature: sha256=<HMAC>`
+  when a per-client webhook secret is configured (see below).
+- **Rate limiting**: requests are rate-limited per client (default `120/minute`).
+- **Known limitations**: this is a demo-grade identity model. `X-Client-ID` is
+  a bearer token with no registration or audit step, and a per-client API key
+  does not raise privileges beyond what the client ID already grants (see the
+  `POST /api/v1/client/key` endpoint docstring). A registration system is out of
+  scope by design.
+
+### OpenAPI contract
+
+`openapi.json` and `openapi.yaml` are **generated** from the running app, not
+hand-written:
+
+```bash
+make openapi          # regenerate both files from the FastAPI app
+make openapi-check    # fail if the committed files are stale (runs in CI too)
+```
+
+Any route or response-model change must be committed together with a regenerated
+contract — the CI tests workflow runs `scripts/gen_openapi.py --check` on every
+push and pull request, so a stale spec fails CI instead of drifting silently.
+
 ## 🐳 Docker Commands
 
 ```bash

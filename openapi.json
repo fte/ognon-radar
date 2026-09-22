@@ -2021,8 +2021,23 @@
         "title": "WebhookConfigResponse",
         "description": "Response for webhook configuration endpoints."
       }
+    },
+    "securitySchemes": {
+      "X-Client-ID": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Client-ID",
+        "description": "Client identity for job tracking. A bearer token generated locally by the client (e.g. by the web client, kept in localStorage). Scopes jobs, captures, screenshots, and webhooks to one client. Anyone who holds it can access that client's data — treat it as a credential."
+      },
+      "X-API-Key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Optional API key. A per-client key minted via POST /api/v1/client/key replaces X-Client-ID on subsequent requests. When the deployment config sets security.api_key, a matching key is required and grants admin (cross-client) access. The default local config leaves it empty, which disables key enforcement."
+      }
     }
   },
+  "security": [],
   "tags": [
     {
       "name": "public-api",

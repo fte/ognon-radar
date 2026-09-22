@@ -4,8 +4,9 @@ Regenerate openapi.json and openapi.yaml from the running FastAPI app.
 
 Both files are produced from a single in-memory copy of `app.openapi()`,
 so they always agree with each other and with what the server actually
-serves at /openapi.json. The only editorial addition is the `servers`
-block (public documentation metadata) — everything else mirrors the code.
+serves at /openapi.json. The only editorial additions are the `servers`
+block and the `components.securitySchemes` / root `security` documentation
+(public metadata) — everything else mirrors the code.
 
 Usage:
     python scripts/gen_openapi.py            # write both files
@@ -32,8 +33,41 @@ SERVERS = [
     },
 ]
 
+# Client-identity/API-key auth documentation. Purely editorial metadata like
+# SERVERS: FastAPI will not emit a securitySchemes block on its own because
+# auth is enforced via plain Optional header dependencies (core/auth.py), not
+# FastAPI Security() dependencies. The API is intentionally public — these are
+# optional credentials (root `security: []`), not requirements.
+SECURITY_SCHEMES = {
+    "X-Client-ID": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Client-ID",
+        "description": (
+            "Client identity for job tracking. A bearer token generated locally "
+            "by the client (e.g. by the web client, kept in localStorage). "
+            "Scopes jobs, captures, screenshots, and webhooks to one client. "
+            "Anyone who holds it can access that client's data — treat it as a "
+            "credential."
+        ),
+    },
+    "X-API-Key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": (
+            "Optional API key. A per-client key minted via "
+            "POST /api/v1/client/key replaces X-Client-ID on subsequent "
+            "requests. When the deployment config sets security.api_key, a "
+            "matching key is required and grants admin (cross-client) access. "
+            "The default local config leaves it empty, which disables key "
+            "enforcement."
+        ),
+    },
+}
+
 # Preferred top-level key order for a readable, conventional document.
-KEY_ORDER = ["openapi", "info", "servers", "paths", "components", "tags"]
+KEY_ORDER = ["openapi", "info", "servers", "paths", "components", "security", "tags"]
 
 
 def build_spec() -> dict:
@@ -43,6 +77,10 @@ def build_spec() -> dict:
 
     spec = app.openapi()
     spec["servers"] = SERVERS
+    # Document the optional credential headers. Root `security: []` states the
+    # posture explicitly: the API is public, these schemes are optional.
+    spec.setdefault("components", {})["securitySchemes"] = SECURITY_SCHEMES
+    spec["security"] = []
 
     ordered = {}
     for key in KEY_ORDER:
@@ -69,9 +107,11 @@ def main() -> int:
 
     if "--check" in sys.argv:
         stale = []
-        if openapi_json.exists() and openapi_json.read_text() != json_doc:
+        # A missing file is stale too — otherwise deleting the committed spec
+        # would silently pass CI instead of being caught as drift.
+        if not openapi_json.exists() or openapi_json.read_text() != json_doc:
             stale.append(str(openapi_json))
-        if openapi_yaml.exists() and openapi_yaml.read_text() != yaml_doc:
+        if not openapi_yaml.exists() or openapi_yaml.read_text() != yaml_doc:
             stale.append(str(openapi_yaml))
         if stale:
             print(f"STALE: {' '.join(stale)} — run `make openapi`")
