@@ -346,7 +346,7 @@ class TestSERPProbeBudget:
         assert elapsed < 1.5, f"crawl blocked {elapsed:.2f}s by slow probes"
 
     def test_budget_expiry_cancels_queued_probes(self, _patch_config, monkeypatch, caplog):
-        """With 1 worker, the 2nd probe stays queued and must be cancellable."""
+        """With 1 worker, the 2nd probe is never launched past the available window."""
         def slow_probe(url, **kwargs):
             time.sleep(2.0)
             return True
@@ -362,8 +362,40 @@ class TestSERPProbeBudget:
         assert len(results) == 2
         expired = [r.message for r in caplog.records if "without verdict" in r.message]
         assert expired, "expected the budget-expiry warning"
-        # 1 abandoned in flight + 1 cancelled before start
-        assert any("1 abandoned in flight" in m and "1 cancelled" in m for m in expired), expired
+        # 1 abandoned in flight (the running probe), 1 never scheduled at all
+        assert any("1 abandoned in flight" in m and "1 never scheduled" in m for m in expired), expired
+
+    def test_stops_probing_once_needed_reachable_found(self, _patch_config, monkeypatch):
+        """Only entries needed to reach max_results get probed — no launch-and-cancel.
+
+        The 2nd entry is both slow and unnecessary: with max_results=1 it must
+        never have its expensive Tor probe scheduled in the first place.
+        """
+        calls = []
+
+        def recording_probe(url, **kwargs):
+            calls.append(url)
+            if url == _VALID_ONION_A:  # first entry: reachable and fast
+                return True
+            time.sleep(2.0)            # second entry: slow AND never needed
+            return True
+
+        crawler, _ = self._make_crawler(recording_probe)
+        monkeypatch.setattr("core.crawler.settings.serp_probe_budget", 6.0, raising=False)
+
+        results, _ = crawler.crawl_and_search(
+            start_url=f"http://{_DDG_HOST}",
+            search_term="anything",
+            max_depth=1,
+            max_pages=5,
+            max_results=1,
+            timeout=10,
+        )
+        assert [r["url"] for r in results] == [_VALID_ONION_A]
+        assert calls == [_VALID_ONION_A], (
+            "unneeded entry must never be probed — 'stop as soon as max_results "
+            f"are found' is not enforced; got {calls}"
+        )
 
     def test_unprobed_not_counted_as_skipped(self, _patch_config, monkeypatch, caplog):
         """The skipped metric counts only probes that really ran and failed."""

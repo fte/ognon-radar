@@ -294,31 +294,41 @@ class OnionCrawler:
     def _probe_serp_reachability(
         self,
         entries: List[Dict[str, str]],
+        needed: int = 0,
     ) -> Tuple[Dict[int, bool], List[int]]:
         """Probe SERP entries for reachability under a strict wall-clock budget.
 
-        A ThreadPoolExecutor fans out check_reachable probes; results are
-        consumed as they complete via FIRST_COMPLETED so we never wait on the
-        slowest probe once the budget is gone.
+        Bounded producer/consumer: at most ``max_workers`` probes are in flight
+        at any one time and new probes are submitted only while more reachable
+        results are still needed. When ``needed`` reachable verdicts are in,
+        submission stops entirely — the remaining entries are never scheduled,
+        so no expensive Tor call is launched for work the caller no longer
+        needs (the "stop as soon as max_results are found" promise).
 
-        When the budget expires:
-          - queued (not-yet-started) probes are cancelled;
-          - in-flight probes cannot be interrupted from the caller side, so we
-            abandon them and move on (pool.shutdown(wait=False) — the worker
-            threads finish on their own in the background).
+        Two exit paths:
+          * budget expiry: queued (not-yet-started) probes are cancelled and
+            in-flight ones abandoned (pool.shutdown(wait=False) — the worker
+            threads finish on their own in the background). Every entry without
+            a verdict is returned as unprobed so the caller can surface it
+            unfiltered rather than silently empty the SERP when Tor is slow.
+          * early stop (``needed`` reachable found): queued probes are
+            cancelled, nothing else is scheduled, and nothing is returned
+            as unprobed — the caller already has enough results to fill its cap.
 
         "skipped" must only ever count probes that actually ran and came back
-        unreachable — cancelled or abandoned futures are reported separately
-        as unprobed, otherwise the metric overstates real measurements.
+        unreachable — cancelled, abandoned, or never-scheduled entries are
+        reported separately as unprobed, otherwise the metric overstates real
+        measurements.
 
         Returns:
             (verdicts, unprobed_indices) where:
-              verdicts:        {entry_index: reachable_bool} for every entry
-                               whose probe actually completed;
-              unprobed_indices: sorted indices never probed (budget expiry).
-                               Callers decide whether to surface or drop them.
+              verdicts:         {entry_index: reachable_bool} for every entry
+                                whose probe actually completed;
+              unprobed_indices: sorted indices never probed (only returned on
+                                budget expiry). Callers decide whether to
+                                surface or drop them.
         """
-        if not entries:
+        if not entries or needed <= 0:
             return {}, []
 
         budget_s = max(0.1, float(getattr(settings, 'serp_probe_budget', 6.0)))
@@ -326,24 +336,43 @@ class OnionCrawler:
             1.0, float(getattr(settings, 'serp_probe_connect_timeout', 5.0))
         )
         max_workers = max(1, int(getattr(settings, 'serp_probe_max_workers', 5)))
+        # Never spin up more probes/threads than we could possibly need.
+        max_workers = min(max_workers, len(entries), needed)
 
         deadline = time.monotonic() + budget_s
         verdicts: Dict[int, bool] = {}
+        reachable_count = 0
 
-        pool = ThreadPoolExecutor(max_workers=min(max_workers, len(entries)))
-        futures = {
-            pool.submit(
-                self.tor_client.check_reachable,
-                entry['url'],
-                connect_timeout=connect_timeout,
-            ): idx
-            for idx, entry in enumerate(entries)
-        }
+        pool = ThreadPoolExecutor(max_workers=max_workers)
+        futures: Dict[Any, int] = {}  # future -> entry index
+        pending: Set[Any] = set()
+        next_idx = 0
 
-        pending = set(futures)
+        def _submit_more() -> None:
+            """Schedule probes up to the in-flight window while still needed."""
+            nonlocal next_idx
+            while (
+                next_idx < len(entries)
+                and len(pending) < max_workers
+                and reachable_count < needed
+            ):
+                idx = next_idx
+                next_idx += 1
+                fut = pool.submit(
+                    self.tor_client.check_reachable,
+                    entries[idx]['url'],
+                    connect_timeout=connect_timeout,
+                )
+                futures[fut] = idx
+                pending.add(fut)
+
+        _submit_more()
+
+        budget_expired = False
         while pending:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                budget_expired = True
                 break
             done, pending = futures_wait(
                 pending,
@@ -351,26 +380,44 @@ class OnionCrawler:
                 return_when=FIRST_COMPLETED,
             )
             for fut in done:
-                idx = futures[fut]
+                idx = futures.pop(fut)
                 try:
-                    verdicts[idx] = fut.result()
+                    verdicts[idx] = bool(fut.result())
                 except Exception:
                     verdicts[idx] = False  # check_reachable swallows its own errors; belt & braces
+                if verdicts[idx]:
+                    reachable_count += 1
+            if reachable_count >= needed:
+                break  # enough reachable results — stop scheduling new probes
+            _submit_more()
 
         unprobed_indices: List[int] = []
-        if pending:
+        if budget_expired:
             # Cancel what never started; in-flight probes are abandoned (the
-            # workers finish on their own in the background). Neither category
-            # produced a verdict, so BOTH count as unprobed and are surfaced
-            # unfiltered — dropping them would silently empty the SERP when
-            # Tor is slow.
+            # workers finish on their own in the background). Entries without a
+            # verdict — including those never scheduled past next_idx — are
+            # reported as unprobed and surfaced unfiltered, so a slow Tor never
+            # silently empties the SERP.
             cancelled = sum(1 for f in pending if f.cancel())
-            unprobed_indices = sorted(futures[f] for f in pending)
+            never_scheduled = len(entries) - next_idx
+            probed_no_verdict = sorted(futures[f] for f in pending)
+            unprobed_indices = sorted(
+                set(probed_no_verdict) | set(range(next_idx, len(entries)))
+            )
             logger.warning(
                 f"SERP probe budget ({budget_s:.1f}s) expired: "
-                f"{len(unprobed_indices)}/{len(futures)} reachability checks "
-                f"without verdict ({len(pending) - cancelled} abandoned "
-                f"in flight, {cancelled} cancelled before start)"
+                f"{len(unprobed_indices)}/{len(entries)} reachability checks "
+                f"without verdict ({len(pending) - cancelled} abandoned in flight, "
+                f"{cancelled} cancelled, {never_scheduled} never scheduled)"
+            )
+        elif pending:
+            # Early stop: enough reachable results already found, so release
+            # anything still queued and drop the rest (none of it was probed).
+            cancelled = sum(1 for f in pending if f.cancel())
+            logger.info(
+                f"SERP: probe target reached ({reachable_count}/{needed}); "
+                f"{cancelled} queued probe(s) cancelled, "
+                f"{len(entries) - next_idx} entries never probed"
             )
 
         pool.shutdown(wait=False)
@@ -417,8 +464,13 @@ class OnionCrawler:
                     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                     entries = serp_parser(soup)
 
-                    # Filter out unreachable .onion sites under a per-page budget
-                    verdicts, unprobed_idx = self._probe_serp_reachability(entries)
+                    # How many more results this page must contribute. Probing
+                    # stops as soon as enough reachable entries are found, so
+                    # slow/unneeded entries are never probed at all.
+                    needed = max_results - len(results)
+                    if needed <= 0:
+                        break
+                    verdicts, unprobed_idx = self._probe_serp_reachability(entries, needed)
                     probed = len(verdicts)
                     skipped = sum(1 for up in verdicts.values() if not up)
 
