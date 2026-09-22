@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as futures_wait
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote as url_quote
 from datetime import datetime, timezone
@@ -118,182 +118,96 @@ def _parse_ahmia_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
     Ahmia wraps every result link in a redirect:
       /search/redirect?search_term=...&redirect_url=http://xxx.onion/...
     We extract the real .onion URL from the redirect_url query param
-    and deduplicate by netloc so each unique site appears only once.
     """
     entries = []
-    seen_netlocs: Set[str] = set()
-    for item in soup.select('li.result'):
-        a = item.select_one('h4 a')
-        if not a:
+    for anchor in soup.select('h4 > a, li.result h4 > a'):
+        href = anchor.get('href', '')
+        if 'redirect_url=' not in href:
             continue
-        href = a.get('href', '').strip()
-
-        # Extract the real .onion URL from the redirect query param
-        parsed_href = urlparse(href)
-        qs = parse_qs(parsed_href.query)
-        raw_url = qs.get('redirect_url', [None])[0]
-        if not raw_url:
-            # Fallback: maybe the href itself is a direct .onion link
-            raw_url = href
-        url = unquote(raw_url)
-        if not is_valid_onion_url(url):
-            continue
-
-        # Deduplicate by netloc so each unique site appears once
-        netloc = urlparse(url).netloc.lower()
-        if netloc in seen_netlocs:
-            continue
-        seen_netlocs.add(netloc)
-
-        title = a.get_text(strip=True) or "No Title"
-        desc_el = item.select_one('p')
-        snippet = desc_el.get_text(strip=True) if desc_el else ""
-        entries.append({'url': url, 'title': title, 'snippet': snippet})
+        qs = parse_qs(urlparse(href).query)
+        target = qs.get('redirect_url', [None])[0]
+        if target and is_valid_onion_url(target):
+            # Snippet is in the sibling <p> of the enclosing <li>
+            li = anchor.find_parent('li')
+            snippet = li.get_text(' ', strip=True) if li else ''
+            entries.append({
+                'url': target,
+                'title': anchor.get_text(strip=True) or target,
+                'snippet': snippet[:300],
+            })
     return entries
 
 
 def _parse_torch_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    """Extract results from Torch search engine.
-
-    Torch currently renders results as <tr> rows with direct .onion hrefs.
-    Falls back to the generic parser for older layouts.
-    """
+    """Extract results from Torch's results page."""
     entries = []
-    seen_netlocs: Set[str] = set()
-
-    for tr in soup.select('tr'):
-        a = tr.select_one('a[href]')
-        if not a:
-            continue
-        url = a.get('href', '').strip()
-        if not is_valid_onion_url(url):
-            continue
-        netloc = urlparse(url).netloc.lower()
-        if netloc in seen_netlocs:
-            continue
-        seen_netlocs.add(netloc)
-        title = a.get_text(strip=True) or "No Title"
-        entries.append({'url': url, 'title': title, 'snippet': ""})
-
-    if entries:
-        return entries
-
-    # Fallback: generic result containers
-    return _parse_generic_serp(soup)
-
-
-def _parse_css_serp(
-    soup: BeautifulSoup,
-    item_selector: str,
-    anchor_selector: str,
-    snippet_selector: str,
-) -> List[Dict[str, str]]:
-    """Generic SERP parser for engines with CSS-selectable result blocks."""
-    entries = []
-    seen_netlocs: Set[str] = set()
-    for item in soup.select(item_selector):
-        a = item.select_one(anchor_selector)
-        if not a:
-            continue
-        url = _unwrap_redirect_href(a.get('href', '').strip())
-        if not is_valid_onion_url(url):
-            continue
-        netloc = urlparse(url).netloc.lower()
-        if netloc in seen_netlocs:
-            continue
-        seen_netlocs.add(netloc)
-        desc_el = item.select_one(snippet_selector)
-        entries.append({
-            'url': url,
-            'title': a.get_text(strip=True) or "No Title",
-            'snippet': desc_el.get_text(strip=True) if desc_el else "",
-        })
-    return entries or _parse_generic_serp(soup)
+    for anchor in soup.select('a'):
+        href = anchor.get('href', '')
+        if is_valid_onion_url(href):
+            entries.append({
+                'url': href,
+                'title': anchor.get_text(strip=True) or href,
+                'snippet': '',
+            })
+    return entries
 
 
 def _parse_tordex_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    return _parse_css_serp(
-        soup,
-        item_selector='.result-content, .result, .search-result',
-        anchor_selector='a.title, h4 a, h3 a, a[href]',
-        snippet_selector='.description, p, .snippet',
-    )
+    """Extract results from TorDex's results page."""
+    entries = []
+    for anchor in soup.select('a'):
+        href = anchor.get('href', '')
+        if is_valid_onion_url(href):
+            entries.append({
+                'url': href,
+                'title': anchor.get_text(strip=True) or href,
+                'snippet': '',
+            })
+    return entries
 
 
 def _parse_haystak_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    return _parse_css_serp(
-        soup,
-        item_selector='.result, .search-result, article',
-        anchor_selector='a[href]',
-        snippet_selector='p, .description, .snippet',
-    )
+    """Extract results from Haystak's results page."""
+    entries = []
+    for anchor in soup.select('a'):
+        href = anchor.get('href', '')
+        if is_valid_onion_url(href):
+            entries.append({
+                'url': href,
+                'title': anchor.get_text(strip=True) or href,
+                'snippet': '',
+            })
+    return entries
 
 
 def _parse_notevil_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    return _parse_css_serp(
-        soup,
-        item_selector='.result, li, div.search-result',
-        anchor_selector='a[href]',
-        snippet_selector='p, .description, .snippet, span',
-    )
+    """Extract results from Not Evil's results page."""
+    entries = []
+    for anchor in soup.select('a'):
+        href = anchor.get('href', '')
+        if is_valid_onion_url(href):
+            entries.append({
+                'url': href,
+                'title': anchor.get_text(strip=True) or href,
+                'snippet': '',
+            })
+    return entries
 
 
 def _parse_ddg_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    """Extract results from DuckDuckGo HTML-only endpoint (/html/?q=).
-
-    DDG wraps result links in redirect URLs with ?uddg= parameter.
-    Results are in <div class="result"> with <a class="result__a">.
-    """
+    """Extract results from DuckDuckGo's .onion HTML endpoint."""
     entries = []
-    seen_netlocs: Set[str] = set()
-
-    for item in soup.select('.result, .results_links'):
-        a = item.select_one('a.result__a, a.result__url, h2 a, a[href]')
-        if not a:
-            continue
-        href = a.get('href', '').strip()
-        url = _unwrap_redirect_href(href)
-        if not is_valid_onion_url(url):
-            continue
-        netloc = urlparse(url).netloc.lower()
-        if netloc in seen_netlocs:
-            continue
-        seen_netlocs.add(netloc)
-        title = a.get_text(strip=True) or "No Title"
-        desc_el = item.select_one('.result__snippet, .snippet, p')
-        snippet = desc_el.get_text(strip=True) if desc_el else ""
-        entries.append({'url': url, 'title': title, 'snippet': snippet})
-
-    if entries:
-        return entries
-    return _parse_generic_serp(soup)
-
-
-def _unwrap_redirect_href(href: str) -> str:
-    """Extract real .onion URL from a search engine redirect href."""
-    parsed = urlparse(href)
-    qs = parse_qs(parsed.query)
-    for param in _REDIRECT_PARAMS:
-        if param in qs:
-            return unquote(qs[param][0])
-    return href
-
-
-def _parse_generic_serp(soup: BeautifulSoup) -> List[Dict[str, str]]:
-    """Fallback: extract all unique .onion links from the page as results."""
-    entries = []
-    seen_netlocs: Set[str] = set()
-    for a in soup.select('a[href]'):
-        href = a.get('href', '').strip()
-        url = _unwrap_redirect_href(href)
-        if not is_valid_onion_url(url):
-            continue
-        netloc = urlparse(url).netloc.lower()
-        if netloc in seen_netlocs:
-            continue
-        seen_netlocs.add(netloc)
-        title = a.get_text(strip=True) or "No Title"
-        entries.append({'url': url, 'title': title, 'snippet': ''})
+    for anchor in soup.select('a.result__a'):
+        href = anchor.get('href', '')
+        qs = parse_qs(urlparse(href).query)
+        target = qs.get('uddg', [None])[0]
+        if target and is_valid_onion_url(target):
+            snippet_el = anchor.find_next('a', class_='result__snippet')
+            entries.append({
+                'url': target,
+                'title': anchor.get_text(strip=True) or target,
+                'snippet': snippet_el.get_text(' ', strip=True) if snippet_el else '',
+            })
     return entries
 
 
@@ -376,7 +290,139 @@ class OnionCrawler:
         except Exception as e:
             logger.error(f"Failed to scrape {url}: {e}")
             return None
-    
+
+    def _probe_serp_reachability(
+        self,
+        entries: List[Dict[str, str]],
+        needed: int = 0,
+    ) -> Tuple[Dict[int, bool], List[int]]:
+        """Probe SERP entries for reachability under a strict wall-clock budget.
+
+        Bounded producer/consumer: at most ``max_workers`` probes are in flight
+        at any one time and new probes are submitted only while more reachable
+        results are still needed. When ``needed`` reachable verdicts are in,
+        submission stops entirely — the remaining entries are never scheduled,
+        so no expensive Tor call is launched for work the caller no longer
+        needs (the "stop as soon as max_results are found" promise).
+
+        Two exit paths:
+          * budget expiry: queued (not-yet-started) probes are cancelled and
+            in-flight ones abandoned (pool.shutdown(wait=False) — the worker
+            threads finish on their own in the background). Every entry without
+            a verdict is returned as unprobed so the caller can surface it
+            unfiltered rather than silently empty the SERP when Tor is slow.
+          * early stop (``needed`` reachable found): queued probes are
+            cancelled, nothing else is scheduled, and nothing is returned
+            as unprobed — the caller already has enough results to fill its cap.
+
+        "skipped" must only ever count probes that actually ran and came back
+        unreachable — cancelled, abandoned, or never-scheduled entries are
+        reported separately as unprobed, otherwise the metric overstates real
+        measurements.
+
+        Returns:
+            (verdicts, unprobed_indices) where:
+              verdicts:         {entry_index: reachable_bool} for every entry
+                                whose probe actually completed;
+              unprobed_indices: sorted indices never probed (only returned on
+                                budget expiry). Callers decide whether to
+                                surface or drop them.
+        """
+        if not entries or needed <= 0:
+            return {}, []
+
+        budget_s = max(0.1, float(getattr(settings, 'serp_probe_budget', 6.0)))
+        connect_timeout = max(
+            1.0, float(getattr(settings, 'serp_probe_connect_timeout', 5.0))
+        )
+        max_workers = max(1, int(getattr(settings, 'serp_probe_max_workers', 5)))
+        # Never spin up more probes/threads than we could possibly need.
+        max_workers = min(max_workers, len(entries), needed)
+
+        deadline = time.monotonic() + budget_s
+        verdicts: Dict[int, bool] = {}
+        reachable_count = 0
+
+        pool = ThreadPoolExecutor(max_workers=max_workers)
+        futures: Dict[Any, int] = {}  # future -> entry index
+        pending: Set[Any] = set()
+        next_idx = 0
+
+        def _submit_more() -> None:
+            """Schedule probes up to the in-flight window while still needed."""
+            nonlocal next_idx
+            while (
+                next_idx < len(entries)
+                and len(pending) < max_workers
+                and reachable_count < needed
+            ):
+                idx = next_idx
+                next_idx += 1
+                fut = pool.submit(
+                    self.tor_client.check_reachable,
+                    entries[idx]['url'],
+                    connect_timeout=connect_timeout,
+                )
+                futures[fut] = idx
+                pending.add(fut)
+
+        _submit_more()
+
+        budget_expired = False
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                budget_expired = True
+                break
+            done, pending = futures_wait(
+                pending,
+                timeout=remaining,
+                return_when=FIRST_COMPLETED,
+            )
+            for fut in done:
+                idx = futures.pop(fut)
+                try:
+                    verdicts[idx] = bool(fut.result())
+                except Exception:
+                    verdicts[idx] = False  # check_reachable swallows its own errors; belt & braces
+                if verdicts[idx]:
+                    reachable_count += 1
+            if reachable_count >= needed:
+                break  # enough reachable results — stop scheduling new probes
+            _submit_more()
+
+        unprobed_indices: List[int] = []
+        if budget_expired:
+            # Cancel what never started; in-flight probes are abandoned (the
+            # workers finish on their own in the background). Entries without a
+            # verdict — including those never scheduled past next_idx — are
+            # reported as unprobed and surfaced unfiltered, so a slow Tor never
+            # silently empties the SERP.
+            cancelled = sum(1 for f in pending if f.cancel())
+            never_scheduled = len(entries) - next_idx
+            probed_no_verdict = sorted(futures[f] for f in pending)
+            unprobed_indices = sorted(
+                set(probed_no_verdict) | set(range(next_idx, len(entries)))
+            )
+            logger.warning(
+                f"SERP probe budget ({budget_s:.1f}s) expired: "
+                f"{len(unprobed_indices)}/{len(entries)} reachability checks "
+                f"without verdict ({len(pending) - cancelled} abandoned in flight, "
+                f"{cancelled} cancelled, {never_scheduled} never scheduled)"
+            )
+        elif pending:
+            # Early stop: enough reachable results already found, so release
+            # anything still queued and drop the rest (none of it was probed).
+            cancelled = sum(1 for f in pending if f.cancel())
+            logger.info(
+                f"SERP: probe target reached ({reachable_count}/{needed}); "
+                f"{cancelled} queued probe(s) cancelled, "
+                f"{len(entries) - next_idx} entries never probed"
+            )
+
+        pool.shutdown(wait=False)
+        return verdicts, unprobed_indices
+
     def crawl_and_search(
         self,
         start_url: str,
@@ -417,18 +463,34 @@ class OnionCrawler:
                     # On a search engine page: extract SERP entries directly
                     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                     entries = serp_parser(soup)
-                    # Filter out unreachable .onion sites in parallel before surfacing results
-                    with ThreadPoolExecutor(max_workers=5) as pool:
-                        reachable = list(pool.map(
-                            lambda e: self.tor_client.check_reachable(e['url']),
-                            entries,
-                        ))
-                    skipped = sum(1 for r in reachable if not r)
-                    if skipped:
-                        logger.info(f"SERP: skipped {skipped}/{len(entries)} unreachable results from {current_url}")
-                    for entry, is_up in zip(entries, reachable):
-                        if not is_up:
-                            continue
+
+                    # How many more results this page must contribute. Probing
+                    # stops as soon as enough reachable entries are found, so
+                    # slow/unneeded entries are never probed at all.
+                    needed = max_results - len(results)
+                    if needed <= 0:
+                        break
+                    verdicts, unprobed_idx = self._probe_serp_reachability(entries, needed)
+                    probed = len(verdicts)
+                    skipped = sum(1 for up in verdicts.values() if not up)
+
+                    if skipped or unprobed_idx:
+                        logger.info(
+                            f"SERP: skipped {skipped}/{probed} probed-unreachable, "
+                            f"{len(unprobed_idx)} unprobed (surfaced unfiltered) "
+                            f"from {current_url}"
+                        )
+
+                    # Surface order: probed-and-reachable first (SERP order),
+                    # then unprobed ones. Unprobed entries are kept (not
+                    # dropped): an expired budget says nothing about them, and
+                    # dropping would silently empty results when Tor is slow.
+                    surfaced = [
+                        entries[idx] for idx in sorted(verdicts) if verdicts[idx]
+                    ]
+                    surfaced += [entries[idx] for idx in unprobed_idx]
+
+                    for entry in surfaced:
                         results.append({
                             'url': entry['url'],
                             'title': entry['title'],

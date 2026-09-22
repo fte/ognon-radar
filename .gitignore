@@ -67,3 +67,6 @@ output/
 # Runtime data (SQLite DBs, WAL files)
 data/*
 ognon-jobs/*
+
+# Freebuff local state
+.freebuff/
