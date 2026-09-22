@@ -71,7 +71,7 @@ else
   CLEAN_CMD    := $(DOCKER_COMPOSE) down -v
 endif
 
-.PHONY: up up-build down logs logs-tor restart ps shell test crawler locust clean runtime help _guard-runtime
+.PHONY: up up-build down logs logs-tor restart ps shell test crawler locust clean runtime openapi help _guard-runtime
 
 # Fail fast with guidance when no container backend (or compose runner) is available.
 _guard-runtime:
@@ -134,6 +134,15 @@ runtime:                    ## Show the detected container backend
 	elif [ "$(RUNTIME_EFFECTIVE)" = "docker" ]; then \
 		docker --version 2>/dev/null || true; \
 		echo "Current context: $$(docker context show 2>/dev/null)"; \
+	fi
+
+openapi:                    ## Regenerate openapi.json + openapi.yaml from the FastAPI app
+	@if python3 -c 'import fastapi' >/dev/null 2>&1; then \
+		python3 scripts/gen_openapi.py; \
+	else \
+		echo "fastapi is not installed in the host python."; \
+		echo "Run this inside the API container (make shell) or a venv with requirements installed."; \
+		exit 1; \
 	fi
 
 help:                       ## Show this help

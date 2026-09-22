@@ -1,0 +1,2036 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "DarkWeb Search API",
+    "description": "REST API for searching .onion sites via Tor network",
+    "contact": {
+      "name": "Ognon Radar Project",
+      "url": "https://github.com/ognon-radar",
+      "email": "security@ognon-radar.local"
+    },
+    "license": {
+      "name": "MIT License",
+      "identifier": "MIT"
+    },
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.ognon-radar.local",
+      "description": "Production server"
+    },
+    {
+      "url": "http://localhost:8000",
+      "description": "Local development"
+    }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health Check",
+        "description": "Health check endpoint to verify API and Tor connectivity.\n\nReturns:\n    HealthResponse with status and Tor connection info",
+        "operationId": "health_check_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search": {
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Search Onion Sites",
+        "description": "Submit a search job for .onion sites containing a specific term.\n\nReturns immediately with a job ID. Poll GET /api/v1/jobs/{job_id}\nfor status and results.\n\nArgs:\n    request: HTTP request containing search parameters as JSON\n    x_client_id: Optional client identifier header\n\nReturns:\n    JobCreatedResponse with job_id and poll URL (202 Accepted)",
+        "operationId": "search_onion_sites_api_v1_search_post",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client identifier for job tracking",
+              "title": "X-Client-Id"
+            },
+            "description": "Client identifier for job tracking"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "List Jobs",
+        "description": "List jobs scoped to the requesting client. API key holders see all jobs.",
+        "operationId": "list_jobs_api_v1_jobs_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status",
+              "title": "Status"
+            },
+            "description": "Filter by status"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by job type: search, capture, screenshot",
+              "title": "Type"
+            },
+            "description": "Filter by job type: search, capture, screenshot"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Max jobs to return",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Max jobs to return"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Offset for pagination",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Offset for pagination"
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Delete All Jobs",
+        "description": "Delete completed/failed/cancelled jobs scoped to the requesting client. API key holders delete across all clients.",
+        "operationId": "delete_all_jobs_api_v1_jobs_delete",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by status (default: all terminal)",
+              "title": "Status"
+            },
+            "description": "Filter by status (default: all terminal)"
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete All Jobs Api V1 Jobs Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Job",
+        "description": "Get job details. Paginate search results with ?offset=N&limit=N.",
+        "operationId": "get_job_api_v1_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Result offset for pagination",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Result offset for pagination"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Max results to return",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Max results to return"
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Delete Job",
+        "description": "Delete a completed, failed, or cancelled job.",
+        "operationId": "delete_job_api_v1_jobs__job_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/stream": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Stream Job",
+        "description": "Stream job status as Server-Sent Events. Closes automatically on terminal state.",
+        "operationId": "stream_job_api_v1_jobs__job_id__stream_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 30,
+              "minimum": 0.5,
+              "description": "Poll interval in seconds",
+              "default": 2.0,
+              "title": "Interval"
+            },
+            "description": "Poll interval in seconds"
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/stream-token": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Create Stream Token",
+        "description": "Mint a short-lived (60s) single-use token for SSE streaming.\nEventSource cannot send headers, so the token is passed as ?token= in the URL.",
+        "operationId": "create_stream_token_api_v1_jobs__job_id__stream_token_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Stream Token Api V1 Jobs  Job Id  Stream Token Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancel Job",
+        "description": "Cancel a queued job. Running jobs cannot be cancelled.",
+        "operationId": "cancel_job_api_v1_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capture": {
+      "post": {
+        "tags": [
+          "capture"
+        ],
+        "summary": "Capture Onion Site",
+        "description": "Submit a capture job for a .onion site.\n\nDownloads all pages and assets (images, CSS, JS) into a .warc.gz archive.\nReturns immediately with a job_id. Poll GET /api/v1/jobs/{job_id} for status,\nthen download via GET /api/v1/captures/{job_id}/download.",
+        "operationId": "capture_onion_site_api_v1_capture_post",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{job_id}/download": {
+      "get": {
+        "tags": [
+          "capture"
+        ],
+        "summary": "Download Capture",
+        "description": "Download the .warc.gz archive produced by a completed capture job.",
+        "operationId": "download_capture_api_v1_captures__job_id__download_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/screenshots": {
+      "post": {
+        "tags": [
+          "screenshots"
+        ],
+        "summary": "Screenshot Onion Site",
+        "description": "Submit a screenshot job for a .onion page.\n\nReturns immediately with a job_id. Poll GET /api/v1/jobs/{job_id} for status,\nthen download via GET /api/v1/screenshots/{storage_key}/download.",
+        "operationId": "screenshot_onion_site_api_v1_screenshots_post",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreenshotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/screenshots/{storage_key}/download": {
+      "get": {
+        "tags": [
+          "screenshots"
+        ],
+        "summary": "Download Screenshot",
+        "description": "Download the PNG produced by a completed screenshot job.",
+        "operationId": "download_screenshot_api_v1_screenshots__storage_key__download_get",
+        "parameters": [
+          {
+            "name": "storage_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Storage Key"
+            }
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/screenshots/{filename}": {
+      "get": {
+        "tags": [
+          "screenshots"
+        ],
+        "summary": "Get Search Screenshot",
+        "description": "Serve a per-page screenshot from a search job.",
+        "operationId": "get_search_screenshot_api_v1_jobs__job_id__screenshots__filename__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Filename"
+            }
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/config": {
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Set Webhook Config",
+        "description": "Register or update webhook configuration for a client.",
+        "operationId": "set_webhook_config_api_v1_webhooks_config_put",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Get Webhook Config",
+        "description": "Get webhook configuration for a client.",
+        "operationId": "get_webhook_config_api_v1_webhooks_config_get",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete Webhook Config",
+        "description": "Delete webhook configuration for a client.",
+        "operationId": "delete_webhook_config_api_v1_webhooks_config_delete",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "List Deliveries",
+        "description": "List webhook delivery attempts, optionally filtered by job_id or status.",
+        "operationId": "list_deliveries_api_v1_webhooks_deliveries_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/deliveries/retry": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Retry Failed Deliveries",
+        "description": "Manually trigger a retry of all failed webhook deliveries for this client.",
+        "operationId": "retry_failed_deliveries_api_v1_webhooks_deliveries_retry_post",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/key": {
+      "post": {
+        "tags": [
+          "client"
+        ],
+        "summary": "Generate a personal API key for this client",
+        "description": "Creates a persistent API key bound to the caller's client-id.\nThe key can replace X-Client-ID on all subsequent requests.\nStore it securely — it grants full access to this client's jobs.\n\nSecurity note: X-Client-ID is a bearer token — anyone who holds it\ncan already access the client's jobs. Minting a key from a client_id\ndoes not escalate privileges beyond what the bearer already has. It\ndoes however create a second, DB-backed credential. A proper fix\nrequires a registration system (out of scope for this demo API).",
+        "operationId": "generate_client_key_api_v1_client_key_post",
+        "parameters": [
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": [
+          "root"
+        ],
+        "summary": "Root",
+        "description": "Root endpoint with API information.",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CaptureRequest": {
+        "properties": {
+          "start_url": {
+            "type": "string",
+            "title": "Start Url",
+            "description": "Root .onion URL to capture"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "Short label included in the archive filename (e.g. search term)"
+          },
+          "max_pages": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Max Pages",
+            "default": 20
+          },
+          "max_depth": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Max Depth",
+            "default": 2
+          },
+          "timeout": {
+            "type": "integer",
+            "maximum": 120.0,
+            "minimum": 10.0,
+            "title": "Timeout",
+            "default": 30
+          }
+        },
+        "type": "object",
+        "required": [
+          "start_url"
+        ],
+        "title": "CaptureRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "API health status"
+          },
+          "tor_connected": {
+            "type": "boolean",
+            "title": "Tor Connected",
+            "description": "Tor connectivity status"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Timestamp",
+            "description": "Current server timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "tor_connected",
+          "timestamp"
+        ],
+        "title": "HealthResponse",
+        "description": "Response model for health check endpoint."
+      },
+      "JobCreatedResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id",
+            "description": "Unique job identifier"
+          },
+          "client_id": {
+            "type": "string",
+            "title": "Client Id",
+            "description": "Client identifier to include in X-Client-ID on subsequent requests"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Initial job status",
+            "default": "queued"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "ISO 8601 creation timestamp"
+          },
+          "poll_url": {
+            "type": "string",
+            "title": "Poll Url",
+            "description": "URL to poll for job status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "client_id",
+          "created_at",
+          "poll_url"
+        ],
+        "title": "JobCreatedResponse",
+        "description": "Response returned when a search job is submitted (202 Accepted)."
+      },
+      "JobListResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobResponse"
+            },
+            "type": "array",
+            "title": "Jobs"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total jobs matching filter"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "default": 20
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "total"
+        ],
+        "title": "JobListResponse",
+        "description": "Paginated list of jobs."
+      },
+      "JobResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Job type: search, capture, or screenshot"
+          },
+          "client_id": {
+            "type": "string",
+            "title": "Client Id",
+            "description": "Client identifier from X-Client-ID header",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "request": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Request",
+            "description": "Original search request parameters"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result",
+            "description": "Job result payload (when completed)"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress",
+            "description": "Capture progress while running: {pages, assets, size_bytes}"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Error message (when failed)"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "ISO 8601 creation timestamp"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At",
+            "description": "ISO 8601 start timestamp"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At",
+            "description": "ISO 8601 completion timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "request",
+          "created_at"
+        ],
+        "title": "JobResponse",
+        "description": "Full job detail returned by GET /jobs/{id}."
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "JobStatus"
+      },
+      "JobType": {
+        "type": "string",
+        "enum": [
+          "search",
+          "capture",
+          "screenshot"
+        ],
+        "title": "JobType"
+      },
+      "ScreenshotRequest": {
+        "properties": {
+          "start_url": {
+            "type": "string",
+            "title": "Start Url",
+            "description": "Root .onion URL to screenshot"
+          },
+          "timeout": {
+            "type": "integer",
+            "maximum": 120.0,
+            "minimum": 10.0,
+            "title": "Timeout",
+            "default": 30
+          }
+        },
+        "type": "object",
+        "required": [
+          "start_url"
+        ],
+        "title": "ScreenshotRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WebhookConfig": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Webhook URL to call (must be HTTPS in production)"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events",
+            "description": "Events to subscribe to",
+            "default": [
+              "job.completed",
+              "job.failed"
+            ]
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret",
+            "description": "Optional secret for HMAC signature verification"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "description": "Whether webhook is active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "WebhookConfig",
+        "description": "Webhook configuration for a client."
+      },
+      "WebhookConfigResponse": {
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "title": "Client Id",
+            "description": "Client identifier"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Webhook URL"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Events",
+            "description": "Subscribed events"
+          },
+          "has_secret": {
+            "type": "boolean",
+            "title": "Has Secret",
+            "description": "Whether an HMAC secret is configured"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "description": "Whether webhook is active"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "Configuration creation timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "client_id",
+          "url",
+          "events",
+          "has_secret",
+          "active",
+          "created_at"
+        ],
+        "title": "WebhookConfigResponse",
+        "description": "Response for webhook configuration endpoints."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "public-api",
+      "description": "This API is **intentionally public**. All endpoints expose publicly-available .onion search data. CORS is set to `*` and that is deliberate — any website can make XHR/fetch requests. No authentication is required for search, capture, or screenshot endpoints. See `config.live.yaml` (cors.origins) for the security rationale."
+    },
+    {
+      "name": "root",
+      "description": "API root and discovery endpoints."
+    }
+  ]
+}
