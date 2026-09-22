@@ -218,6 +218,39 @@ docker-compose run --rm api python -m pytest tests/test_capture.py -v
 - Add docstrings to all functions
 - Keep functions small and focused
 
+## 🔄 Automated Dependency Updates
+
+Dependencies update automatically on a **biweekly** train (1st and 15th of each
+month, 03:00 UTC):
+
+1. **Dependabot** (`.github/dependabot.yml`) checks pip, Docker, and GitHub
+   Actions dependencies and opens consolidated PRs — one per ecosystem —
+   against the dedicated **`deps`** branch (created automatically from `main`
+   if it does not exist).
+2. **`deps-auto-merge`** (`.github/workflows/deps-auto-merge.yml`, runs 2nd and
+   16th at 09:00 UTC) squash-merges every green Dependabot PR into `deps`, then
+   runs the full test suite on the updated `deps` head.
+3. If tests pass, it opens a `deps → main` PR and merges it — which triggers
+   the regular CI and live deployment as with any push to `main`.
+4. If a PR conflicts, checks fail, or the test suite fails, a GitHub issue
+   labeled **`dependencies-merge-blocked`** is opened (or updated, one issue
+   per failure streak) with the details. It closes automatically on the next
+   fully green run.
+
+### Manual override
+
+- Trigger the whole train manually: **Actions → Dependencies — auto-merge →
+  Run workflow**.
+- Trigger Dependabot immediately: **Insights → Dependency graph → Dependabot
+  → Check for updates**.
+
+### Notes
+
+- Security (CVE) update PRs always target `main` directly, so fixes are not
+  held back by the biweekly cadence.
+- Merging the `deps → main` PR deploys to the live instance automatically
+  (existing `deploy-live` behavior).
+
 ## 🔮 Roadmap
 
 ### Phase 1: Search Functionality ✅

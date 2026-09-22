@@ -5,12 +5,14 @@ These tests run without Docker or a live Tor connection.
 They use tmp_path-backed SQLite and mock HTTP calls.
 """
 import json
+import logging
 import time
 from unittest.mock import MagicMock, patch, call
 
 import httpx
 import pytest
 from bs4 import BeautifulSoup
+from fastapi import Request
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -252,7 +254,7 @@ class TestSERPReachabilityFilter:
         resp.raise_for_status = MagicMock()
         tor.get_with_retries.return_value = resp
 
-        tor.check_reachable.side_effect = lambda url: reachable_map.get(url, False)
+        tor.check_reachable.side_effect = lambda url, **kwargs: reachable_map.get(url, False)
         return OnionCrawler(tor), tor
 
     def _run(self, crawler):
@@ -292,6 +294,135 @@ class TestSERPReachabilityFilter:
             _VALID_ONION_B: False,
         })
         assert self._run(crawler) == []
+
+
+class TestSERPProbeBudget:
+    """Per-page budget semantics for SERP reachability probing.
+
+    When the budget expires, in-flight/queued probes must NOT block the crawl
+    until their own connect timeout, must NOT be counted as "skipped" (they
+    were never really probed), and their entries must still be surfaced.
+    """
+
+    def _make_crawler(self, probe_fn):
+        from core.crawler import OnionCrawler
+        tor = MagicMock()
+        resp = MagicMock()
+        resp.text = _DDG_SERP_HTML
+        resp.raise_for_status = MagicMock()
+        tor.get_with_retries.return_value = resp
+        tor.check_reachable.side_effect = probe_fn
+        return OnionCrawler(tor), tor
+
+    def _run(self, crawler):
+        results, _ = crawler.crawl_and_search(
+            start_url=f"http://{_DDG_HOST}",
+            search_term="anything",
+            max_depth=1,
+            max_pages=5,
+            max_results=10,
+            timeout=10,
+        )
+        return results
+
+    def test_budget_expiry_does_not_wait_for_slow_probes(self, _patch_config, monkeypatch):
+        """Slow probes must not hold the crawl past the budget."""
+        def slow_probe(url, **kwargs):
+            time.sleep(2.0)
+            return True
+
+        crawler, _ = self._make_crawler(slow_probe)
+        monkeypatch.setattr("core.crawler.settings.serp_probe_budget", 0.3, raising=False)
+
+        t0 = time.monotonic()
+        results = self._run(crawler)
+        elapsed = time.monotonic() - t0
+
+        # Entries surfaced (unfiltered) despite probes never completing...
+        urls = [r["url"] for r in results]
+        assert _VALID_ONION_A in urls
+        assert _VALID_ONION_B in urls
+        # ...and quickly — well under the 2s probe time.
+        assert elapsed < 1.5, f"crawl blocked {elapsed:.2f}s by slow probes"
+
+    def test_budget_expiry_cancels_queued_probes(self, _patch_config, monkeypatch, caplog):
+        """With 1 worker, the 2nd probe is never launched past the available window."""
+        def slow_probe(url, **kwargs):
+            time.sleep(2.0)
+            return True
+
+        crawler, _ = self._make_crawler(slow_probe)
+        monkeypatch.setattr("core.crawler.settings.serp_probe_budget", 0.3, raising=False)
+        monkeypatch.setattr("core.crawler.settings.serp_probe_max_workers", 1, raising=False)
+
+        with caplog.at_level(logging.WARNING, logger="core.crawler"):
+            results = self._run(crawler)
+
+        # Both entries surfaced (no verdict ≠ dropped)
+        assert len(results) == 2
+        expired = [r.message for r in caplog.records if "without verdict" in r.message]
+        assert expired, "expected the budget-expiry warning"
+        # 1 abandoned in flight (the running probe), 1 never scheduled at all
+        assert any("1 abandoned in flight" in m and "1 never scheduled" in m for m in expired), expired
+
+    def test_stops_probing_once_needed_reachable_found(self, _patch_config, monkeypatch):
+        """Only entries needed to reach max_results get probed — no launch-and-cancel.
+
+        The 2nd entry is both slow and unnecessary: with max_results=1 it must
+        never have its expensive Tor probe scheduled in the first place.
+        """
+        calls = []
+
+        def recording_probe(url, **kwargs):
+            calls.append(url)
+            if url == _VALID_ONION_A:  # first entry: reachable and fast
+                return True
+            time.sleep(2.0)            # second entry: slow AND never needed
+            return True
+
+        crawler, _ = self._make_crawler(recording_probe)
+        monkeypatch.setattr("core.crawler.settings.serp_probe_budget", 6.0, raising=False)
+
+        results, _ = crawler.crawl_and_search(
+            start_url=f"http://{_DDG_HOST}",
+            search_term="anything",
+            max_depth=1,
+            max_pages=5,
+            max_results=1,
+            timeout=10,
+        )
+        assert [r["url"] for r in results] == [_VALID_ONION_A]
+        assert calls == [_VALID_ONION_A], (
+            "unneeded entry must never be probed — 'stop as soon as max_results "
+            f"are found' is not enforced; got {calls}"
+        )
+
+    def test_unprobed_not_counted_as_skipped(self, _patch_config, monkeypatch, caplog):
+        """The skipped metric counts only probes that really ran and failed."""
+        def slow_probe(url, **kwargs):
+            time.sleep(2.0)
+            return False
+
+        crawler, _ = self._make_crawler(slow_probe)
+        monkeypatch.setattr("core.crawler.settings.serp_probe_budget", 0.3, raising=False)
+
+        with caplog.at_level(logging.INFO, logger="core.crawler"):
+            results = self._run(crawler)
+
+        assert len(results) == 2
+        metrics = [r.message for r in caplog.records if "probed-unreachable" in r.message]
+        assert metrics, "expected the SERP metrics log line"
+        # skipped 0/0: no probe completed, so nothing may be counted as skipped
+        assert any("skipped 0/0 probed-unreachable, 2 unprobed" in m for m in metrics), metrics
+
+    def test_probed_results_still_filtered_without_budget_expiry(self, _patch_config, monkeypatch):
+        """Sanity: fast probes finish within budget and filtering still applies."""
+        crawler, _ = self._make_crawler(lambda url, **kw: url == _VALID_ONION_A)
+        monkeypatch.setattr("core.crawler.settings.serp_probe_budget", 6.0, raising=False)
+
+        results = self._run(crawler)
+        urls = [r["url"] for r in results]
+        assert urls == [_VALID_ONION_A]
 
 
 # ── WebhookManager ───────────────────────────────────────────────────
@@ -497,3 +628,94 @@ class TestJobManager:
         job = jm2.get_job("orphan-1")
         assert job["status"] == "failed"
         jm2.shutdown()
+
+
+# ── Rate Limiter ────────────────────────────────────────────────────────
+
+
+class TestRateLimitKey:
+    """Tests for _rate_limit_key extraction logic.
+
+    Verifies precedence: X-API-Key > X-Client-ID > remote IP.
+    Each bucket is scoped with a prefix so keys never collide.
+    """
+
+    @pytest.mark.parametrize("headers,client_host,expected", [
+        # API key takes precedence over everything else
+        ({"X-API-Key": "sk-abc", "X-Client-ID": "client-1"}, "1.2.3.4", "ak:sk-abc"),
+        # Client ID used when no API key
+        ({"X-Client-ID": "client-1"}, "1.2.3.4", "cid:client-1"),
+        # Fallback to X-Forwarded-For — uses real slowapi get_remote_address
+        # which returns request.client.host, not the X-Forwarded-For value
+        ({"X-Forwarded-For": "10.0.0.1, 10.0.0.2"}, "1.2.3.4", "1.2.3.4"),
+        # Fallback to request.client.host
+        ({}, "5.6.7.8", "5.6.7.8"),
+        # No client at all → 127.0.0.1
+        ({}, None, "127.0.0.1"),
+    ])
+    def test_rate_limit_key(self, headers, client_host, expected):
+        from core.rate_limiter import _rate_limit_key
+
+        req = MagicMock(spec=Request)
+        req.headers = headers
+        if client_host is not None:
+            req.client = MagicMock()
+            req.client.host = client_host
+        else:
+            req.client = None
+
+        assert _rate_limit_key(req) == expected
+
+
+class TestRateLimiterInstance:
+    """Verify the global limiter object is correctly instantiated."""
+
+    def test_limiter_is_configured(self):
+        from core.rate_limiter import limiter, _SLOWAPI_AVAILABLE
+
+        if _SLOWAPI_AVAILABLE:
+            from slowapi import Limiter as SlowAPILimiter
+            assert isinstance(limiter, SlowAPILimiter)
+            # Verify our custom key function is attached
+            assert limiter._key_func is not None
+        else:
+            # Stub mode — just verify it's not None
+            assert limiter is not None
+
+    def test_returns_429_when_limit_exceeded(self):
+        """End-to-end test: verify slowapi returns 429 when limit is exceeded.
+
+        Creates a minimal FastAPI app with our custom _rate_limit_key and a
+        low limit (1/minute), then hits the endpoint twice — the second call
+        must be rejected with 429.
+        """
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from slowapi import Limiter, _rate_limit_exceeded_handler
+        from slowapi.errors import RateLimitExceeded
+
+        from core.rate_limiter import _rate_limit_key
+
+        app = FastAPI()
+        limiter = Limiter(
+            key_func=_rate_limit_key,
+            default_limits=["1/minute"],
+            storage_uri="memory://",
+        )
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+        @app.get("/test")
+        @limiter.limit("1/minute")
+        async def test_endpoint(request: Request):
+            return {"ok": True}
+
+        with TestClient(app) as client:
+            resp1 = client.get("/test")
+            assert resp1.status_code == 200, f"First request: {resp1.status_code}"
+
+            resp2 = client.get("/test")
+            assert resp2.status_code == 429, f"Second request: {resp2.status_code}"
+            body = resp2.json()
+            # slowapi returns {error: ...} key, not {detail: ...}
+            assert "rate limit exceeded" in body.get("error", "").lower()

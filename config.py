@@ -38,9 +38,13 @@ class Settings:
         
         # Tor Configuration
         tor_config = config.get('tor', {})
-        self.tor_proxy: str = tor_config.get('proxy', 'socks5h://tor:9050')
+        # Prefer TOR_PROXY / TOR_CONTROL_HOST env vars. The scripts/container
+        # backend sets them to tor's real IP because Apple's vmnet network does
+        # not resolve container names; the `tor:9050` YAML default only works
+        # under Docker's embedded DNS. Falls back to the YAML value otherwise.
+        self.tor_proxy: str = os.getenv('TOR_PROXY', '') or tor_config.get('proxy', 'socks5h://tor:9050')
         self.tor_check_url: str = tor_config.get('check_url', 'https://check.torproject.org/')
-        self.tor_control_host: str = tor_config.get('control_host', 'tor')
+        self.tor_control_host: str = os.getenv('TOR_CONTROL_HOST', '') or tor_config.get('control_host', 'tor')
         self.tor_control_port: int = tor_config.get('control_port', 9051)
         # Prefer TOR_CONTROL_PASSWORD env var (set in docker-compose.yml).
         # Falls back to config value — which should be kept empty in tracked files.
@@ -104,6 +108,12 @@ class Settings:
         self.capture_output_dir: str = resolve_path(capture_config.get('output_dir', 'data/captures'))
         self.capture_max_pages: int = capture_config.get('max_pages', 50)
         self.capture_max_size_mb: int = capture_config.get('max_size_mb', 500)
+
+        # SERP reachability probing (per search-results page)
+        serp_config = config.get('serp_probing', {})
+        self.serp_probe_budget: float = serp_config.get('budget_seconds', 6.0)
+        self.serp_probe_connect_timeout: float = serp_config.get('connect_timeout', 5.0)
+        self.serp_probe_max_workers: int = serp_config.get('max_workers', 5)
 
 
 # Global settings instance
