@@ -8,6 +8,7 @@ These tests mock the Tor client so they work without a running Tor container.
 """
 import json
 import time
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -192,6 +193,64 @@ class TestJobs:
         job_id = self._submit(client, client_id="owner")
         resp = client.get(f"/api/v1/jobs/{job_id}", headers={"X-Client-ID": "stranger"})
         assert resp.status_code == 403
+
+    @staticmethod
+    def _insert_terminal_job(
+        job_id: str,
+        status: str,
+        error: str | None = None,
+        result: dict | None = None,
+        job_type: str = "search",
+        client_id: str = "test-client",
+    ):
+        """Insert a job row directly (deterministic — skips the worker thread)."""
+        from core.job_manager import job_manager
+
+        conn = job_manager._get_conn()
+        conn.execute(
+            "INSERT INTO jobs (id, type, client_id, status, request, result, error, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                job_type,
+                client_id,
+                status,
+                json.dumps({"term": "test", "start_url": "http://x.onion/"}),
+                json.dumps(result) if result is not None else None,
+                error,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+    def test_get_failed_job_returns_422(self, client):
+        self._insert_terminal_job(
+            "failed-422",
+            status="failed",
+            error="Target unreachable via Tor: http://x.onion/",
+            job_type="screenshot",
+        )
+        resp = client.get("/api/v1/jobs/failed-422", headers=self._HDR)
+        assert resp.status_code == 422
+        # The body is the full job object (same shape as a 200 response).
+        data = resp.json()
+        assert data["id"] == "failed-422"
+        assert data["status"] == "failed"
+        assert data["type"] == "screenshot"
+        assert "unreachable via Tor" in data["error"]
+
+    def test_get_completed_job_returns_200(self, client):
+        self._insert_terminal_job(
+            "done-200",
+            status="completed",
+            result={"term": "test", "results": [], "total": 0},
+        )
+        resp = client.get("/api/v1/jobs/done-200", headers=self._HDR)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "done-200"
+        assert data["status"] == "completed"
+        assert data["result"]["total"] == 0
 
     def test_list_jobs(self, client):
         self._submit(client, "term1")

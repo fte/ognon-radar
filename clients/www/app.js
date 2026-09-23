@@ -761,8 +761,12 @@ async function pollOneScreenshot(jobId, entry) {
     const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`, {
       headers: getClientHeaders(),
     });
-    if (!r.ok) return; // 429/timeout : on retentera au prochain tour
-    const job = await r.json();
+    let job = null;
+    try { job = await r.json(); } catch { /* corps non-JSON */ }
+    // 422 = job failed (corps = job complet avec "error") : à traiter ci-dessous.
+    // Autres non-2xx (429/timeout/5xx) : on retente au prochain tour.
+    if (!r.ok && !(r.status === 422 && job && job.status === "failed")) return;
+    if (!job) return;
 
     if (job.status === "completed") {
       screenshotPolls.delete(jobId);

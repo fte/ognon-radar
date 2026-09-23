@@ -247,7 +247,10 @@ def test_resolve_zero_mode_points_to_package_local_browsers(tmp_path, monkeypatc
 def test_resolve_zero_mode_unresolvable_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
     monkeypatch.delenv("INIT_CWD", raising=False)
-    monkeypatch.delitem(sys.modules, "playwright", raising=False)
+    # Simulate "playwright not importable" robustly: an entry set to None in
+    # sys.modules makes `import playwright` raise ImportError, regardless of
+    # whether the package is actually installed (CI image installs it).
+    monkeypatch.setitem(sys.modules, "playwright", None)
 
     assert cpw._resolve_cache_root() is None
 
@@ -302,7 +305,9 @@ def test_evaluate_zero_mode_fallback_scans_package_local_dir(tmp_path, monkeypat
 def test_evaluate_zero_mode_unresolvable_disables_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
     monkeypatch.delenv("INIT_CWD", raising=False)
-    monkeypatch.delitem(sys.modules, "playwright", raising=False)
+    # "playwright not importable" (works even when the package is installed —
+    # sys.modules entry set to None forces the import to fail).
+    monkeypatch.setitem(sys.modules, "playwright", None)
     monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [])
 
     def _must_not_run(cache_root):

@@ -200,7 +200,16 @@ paths:
       tags:
       - jobs
       summary: Get Job
-      description: Get job details. Paginate search results with ?offset=N&limit=N.
+      description: 'Get job details. Paginate search results with ?offset=N&limit=N.
+
+
+        Terminal failure is surfaced with a non-2xx status so polling clients can
+
+        react without parsing the body: a ``failed`` job returns ``422`` with the
+
+        full job object (including ``error``) as the body. ``queued``, ``running``
+
+        and ``completed`` jobs keep returning ``200``.'
       operationId: get_job_api_v1_jobs__job_id__get
       parameters:
       - name: job_id
@@ -254,11 +263,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/JobResponse'
         '422':
-          description: Validation Error
+          description: The job failed — the response body is the full job object, including the 'error' message.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+                $ref: '#/components/schemas/JobResponse'
     delete:
       tags:
       - jobs

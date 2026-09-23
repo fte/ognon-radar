@@ -334,7 +334,7 @@
           "jobs"
         ],
         "summary": "Get Job",
-        "description": "Get job details. Paginate search results with ?offset=N&limit=N.",
+        "description": "Get job details. Paginate search results with ?offset=N&limit=N.\n\nTerminal failure is surfaced with a non-2xx status so polling clients can\nreact without parsing the body: a ``failed`` job returns ``422`` with the\nfull job object (including ``error``) as the body. ``queued``, ``running``\nand ``completed`` jobs keep returning ``200``.",
         "operationId": "get_job_api_v1_jobs__job_id__get",
         "parameters": [
           {
@@ -418,11 +418,11 @@
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "The job failed — the response body is the full job object, including the 'error' message.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/JobResponse"
                 }
               }
             }

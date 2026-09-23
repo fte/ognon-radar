@@ -4,10 +4,10 @@ Job management endpoints — list, get, cancel, delete search jobs.
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from core.auth import get_is_admin, require_api_key, require_client_id, require_client_id_sse
 from core.job_manager import job_manager, JobStatus
@@ -52,7 +52,18 @@ async def list_jobs(
     )
 
 
-@router.get("/jobs/{job_id}", response_model=JobResponse, status_code=200)
+@router.get(
+    "/jobs/{job_id}",
+    response_model=JobResponse,
+    status_code=200,
+    responses={
+        422: {
+            "model": JobResponse,
+            "description": "The job failed — the response body is the full job object, "
+            "including the 'error' message.",
+        }
+    },
+)
 @limiter.limit("30/minute")
 async def get_job(
     request: Request,
@@ -61,8 +72,14 @@ async def get_job(
     is_admin: bool = Depends(get_is_admin),
     offset: int = Query(0, ge=0, description="Result offset for pagination"),
     limit: int = Query(20, ge=1, le=200, description="Max results to return"),
-) -> JobResponse:
-    """Get job details. Paginate search results with ?offset=N&limit=N."""
+) -> Union[JobResponse, JSONResponse]:
+    """Get job details. Paginate search results with ?offset=N&limit=N.
+
+    Terminal failure is surfaced with a non-2xx status so polling clients can
+    react without parsing the body: a ``failed`` job returns ``422`` with the
+    full job object (including ``error``) as the body. ``queued``, ``running``
+    and ``completed`` jobs keep returning ``200``.
+    """
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -72,7 +89,10 @@ async def get_job(
         job["result"]["results"] = all_results[offset: offset + limit]
         job["result"]["offset"] = offset
         job["result"]["limit"] = limit
-    return JobResponse(**job)
+    response = JobResponse(**job)
+    if job["status"] == JobStatus.FAILED:
+        return JSONResponse(status_code=422, content=response.model_dump())
+    return response
 
 
 @router.get("/jobs/{job_id}/stream")
