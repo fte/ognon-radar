@@ -5,14 +5,12 @@ const API_BASE_URL = (_h === "localhost" || _h === "127.0.0.1" || _h === "")
 const CLIENT_ID_KEY = "ognon-client-id";
 const PLACEHOLDER_SRC = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='60'%3E%3Crect width='84' height='60' fill='%23222'/%3E%3Ctext x='42' y='34' font-size='9' font-family='sans-serif' fill='%23555' text-anchor='middle'%3Eno image%3C/text%3E%3C/svg%3E`;
 const API_KEY_KEY = "ognon-api-key";
-const ONION_HANDLER_KEY = "ognon-onion-handler";
 
 
 let clientId = localStorage.getItem(CLIENT_ID_KEY) || generateClientId();
 localStorage.setItem(CLIENT_ID_KEY, clientId);
 
 let storedApiKey = localStorage.getItem(API_KEY_KEY) || null;
-let onionHandler = localStorage.getItem(ONION_HANDLER_KEY) || "default";
 
 const endpoints = [
   {
@@ -136,7 +134,67 @@ const pollLog = document.querySelector("#poll-log");
 let searchEs = null;
 let screenshotsEnabled = false;
 const capturePolls = new Map(); // capture_job_id → timeout handle
-const screenshotPolls = new Map(); // screenshot_job_id → interval handle
+const screenshotPolls = new Map(); // screenshot_job_id → { imgEl, attempts }
+let screenshotTick = null; // intervalle global : 1 GET / 2s (sous le rate-limit 30/min)
+
+/* ───── Enregistrement des appels XHR ─────
+   Intercepte window.fetch pour exposer chaque appel réseau réel
+   dans le panneau "Réseau · XHR" (métode, chemin, code, durée, corps). */
+let xhrTotal = 0;
+const realFetch = window.fetch.bind(window);
+window.fetch = async function (...args) {
+  const startedAt = performance.now();
+  let response;
+  try {
+    response = await realFetch(...args);
+  } catch (error) {
+    recordXhr(args, 0, performance.now() - startedAt, "");
+    throw error;
+  }
+  const duration = performance.now() - startedAt;
+  const ctype = (response.headers.get("content-type") || "").toLowerCase();
+  let body = "";
+  if (!(/image|octet-stream|warc|application\/zip/.test(ctype))) {
+    try {
+      body = (await response.clone().text()).slice(0, 320);
+    } catch { /* corps illisible */ }
+  }
+  recordXhr(args, response.status, duration, body);
+  return response;
+};
+
+function recordXhr(args, status, durationMs, body) {
+  xhrTotal += 1;
+  const input = args[0];
+  const init = args[1] || {};
+  const method =
+    (init.method || (typeof input === "string" ? "GET" : input.method || "GET")).toUpperCase();
+  let path = typeof input === "string" ? input : (input.url || "");
+  if (path.startsWith(API_BASE_URL)) {
+    path = path.slice(API_BASE_URL.length);
+  }
+  const qi = path.indexOf("?");
+  if (qi !== -1) {
+    path = path.slice(0, qi) + (path.includes("token=") ? "?token=…" : "?…");
+  }
+  const ok = status >= 200 && status < 300;
+  const state = ok ? "completed" : "failed";
+  const detail = status === 0 ? "réseau" : `HTTP ${status} · ${Math.round(durationMs)}ms`;
+  addPollLog(method, path, state, detail, body);
+}
+
+/* Bouton "effacer" du panneau Réseau */
+const xhrClear = document.querySelector("#xhr-clear");
+if (xhrClear) {
+  xhrClear.addEventListener("click", () => {
+    pollLog.replaceChildren();
+    xhrTotal = 0; // le compteur repart de zéro pour la session en cours
+    const count = document.querySelector("#xhr-count");
+    if (count) count.textContent = "0";
+  });
+}
+
+/* Liens .onion : href en tor:// — le navigateur (Tor Browser / Brave) gère le protocole. */
 
 renderEndpoints();
 checkHealth();
@@ -167,16 +225,6 @@ document.querySelector("#clear-api-key").addEventListener("click", () => {
   localStorage.removeItem(API_KEY_KEY);
   renderCredentials();
 });
-
-// Onion link handler selector — guard against missing element in the DOM
-const onionSelect = document.querySelector("#onion-handler");
-if (onionSelect) {
-  onionSelect.value = onionHandler;
-  onionSelect.addEventListener("change", () => {
-    onionHandler = onionSelect.value;
-    localStorage.setItem(ONION_HANDLER_KEY, onionHandler);
-  });
-}
 
 healthStatus.addEventListener("click", () => {
   const href = healthStatus.dataset.href;
@@ -311,7 +359,21 @@ async function readJson(response) {
 }
 
 function renderEndpoints() {
-  endpointList.replaceChildren(...endpoints.map((endpoint) => {
+  const liveList = document.querySelector("#endpoint-list");
+  const annexList = document.querySelector("#endpoint-annex-list");
+  const live = endpoints.filter((e) => e.mode === "live");
+  const annex = endpoints.filter((e) => e.mode !== "live");
+
+  if (liveList) {
+    liveList.replaceChildren(...buildEndpointItems(live));
+  }
+  if (annexList) {
+    annexList.replaceChildren(...buildEndpointItems(annex));
+  }
+}
+
+function buildEndpointItems(list) {
+  return list.map((endpoint) => {
     const item = document.createElement("li");
     const method = document.createElement("span");
     const body = document.createElement("div");
@@ -331,7 +393,7 @@ function renderEndpoints() {
     body.append(title, path, description);
     item.append(method, body);
     return item;
-  }));
+  });
 }
 
 function setEndpointState(key, state) {
@@ -435,7 +497,7 @@ function resetScenario() {
   }
   capturePolls.forEach((es) => { if (es && typeof es.close === "function") es.close(); });
   capturePolls.clear();
-  screenshotPolls.forEach((handle) => window.clearInterval(handle));
+  stopScreenshotTick();
   screenshotPolls.clear();
 
   jobId.textContent = "-";
@@ -458,7 +520,7 @@ function updateJob(job) {
   setMeterState(job.status);
 }
 
-function addPollLog(method, path, state, detail) {
+function addPollLog(method, path, state, detail, body) {
   const row = document.createElement("li");
   const timestamp = document.createElement("time");
   const route = document.createElement("code");
@@ -474,7 +536,18 @@ function addPollLog(method, path, state, detail) {
   status.dataset.state = state;
 
   row.append(timestamp, route, status);
+
+  if (body) {
+    const pre = document.createElement("pre");
+    pre.className = "xhr-body";
+    pre.textContent = body;
+    row.append(pre);
+  }
+
   pollLog.prepend(row);
+
+  const count = document.querySelector("#xhr-count");
+  if (count) count.textContent = String(xhrTotal);
 
   while (pollLog.children.length > 20) {
     pollLog.lastElementChild.remove();
@@ -569,9 +642,7 @@ function renderResult(item, thumbMap) {
     badge.className = "onion-badge";
     badge.textContent = "\uD83E\uDDC5 Tor";
     title.append(badge);
-    link.addEventListener("click", (e) => {
-      handleOnionClick(e, item.url);
-    });
+    link.href = torHref(item.url); // ouverture via tor:// géré par le navigateur
   }
 
   snippet.textContent = item.snippet || "Aucun extrait disponible.";
@@ -640,7 +711,7 @@ async function submitAndPollScreenshot(url, imgEl) {
     const resp = await fetch(`${API_BASE_URL}/api/v1/screenshots`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...getClientHeaders() },
-      body: JSON.stringify({ start_url: url }),
+      body: JSON.stringify({ start_url: url, timeout: 90 }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -649,41 +720,65 @@ async function submitAndPollScreenshot(url, imgEl) {
     }
     const { job_id } = await resp.json();
     addPollLog("POST", "/api/v1/screenshots", "queued", job_id);
-
-    let attempts = 0;
-    const MAX_ATTEMPTS = 90; // 3 min max
-    const handle = window.setInterval(async () => {
-      attempts += 1;
-      const stopPolling = (failed) => {
-        window.clearInterval(handle);
-        screenshotPolls.delete(job_id);
-        if (failed) imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
-      };
-      if (attempts > MAX_ATTEMPTS) { stopPolling(true); return; }
-      try {
-        const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(job_id)}`, {
-          headers: getClientHeaders(),
-        });
-        if (!r.ok) { stopPolling(true); return; }
-        const job = await r.json();
-
-        if (job.status === "completed") {
-          if (job.result?.download_url) {
-            stopPolling(false);
-            loadAuthenticatedImage(imgEl, job.result.download_url);
-            addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, "completed", "screenshot ok");
-          } else {
-            stopPolling(true);
-            addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, "completed", "no image");
-          }
-        } else if (job.status === "failed" || job.status === "cancelled") {
-          stopPolling(true);
-          addPollLog("GET", `/api/v1/jobs/${shortId(job_id)}`, job.status, job.error || "screenshot failed");
-        }
-      } catch { /* réseau, on réessaie au prochain tick */ }
-    }, 2000);
-    screenshotPolls.set(job_id, handle);
+    screenshotPolls.set(job_id, { imgEl, attempts: 0 });
+    ensureScreenshotTick();
   } catch { /* soumission échouée, placeholder reste */ }
+}
+
+const MAX_SCREENSHOT_ATTEMPTS = 45; // ~1,5 à 7 min selon le nombre de jobs en file
+
+function stopScreenshotTick() {
+  if (screenshotTick !== null) {
+    window.clearInterval(screenshotTick);
+    screenshotTick = null;
+  }
+}
+
+function ensureScreenshotTick() {
+  if (screenshotTick !== null) return;
+  screenshotTick = window.setInterval(() => {
+    if (screenshotPolls.size === 0) {
+      stopScreenshotTick();
+      return;
+    }
+    // Round-robin : un seul GET par tick (2s) pour rester sous le rate-limit 30/min.
+    const [jobId, entry] = screenshotPolls.entries().next().value;
+    screenshotPolls.delete(jobId);
+    screenshotPolls.set(jobId, entry); // remis en fin de file → rotation
+    pollOneScreenshot(jobId, entry);
+  }, 2000);
+}
+
+async function pollOneScreenshot(jobId, entry) {
+  const { imgEl } = entry;
+  entry.attempts += 1;
+  if (entry.attempts > MAX_SCREENSHOT_ATTEMPTS) {
+    screenshotPolls.delete(jobId);
+    imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
+    return;
+  }
+  try {
+    const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`, {
+      headers: getClientHeaders(),
+    });
+    if (!r.ok) return; // 429/timeout : on retentera au prochain tour
+    const job = await r.json();
+
+    if (job.status === "completed") {
+      screenshotPolls.delete(jobId);
+      if (job.result?.download_url) {
+        loadAuthenticatedImage(imgEl, job.result.download_url);
+        addPollLog("GET", `/api/v1/jobs/${shortId(jobId)}`, "completed", "screenshot ok");
+      } else {
+        imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
+        addPollLog("GET", `/api/v1/jobs/${shortId(jobId)}`, "completed", "no image");
+      }
+    } else if (job.status === "failed" || job.status === "cancelled") {
+      screenshotPolls.delete(jobId);
+      imgEl.classList.replace("result-thumb--pending", "result-thumb--failed");
+      addPollLog("GET", `/api/v1/jobs/${shortId(jobId)}`, job.status, job.error || "screenshot failed");
+    }
+  } catch { /* réseau : on réessaiera au prochain tour */ }
 }
 
 async function startCapture(url, btn, statusEl) {
@@ -807,39 +902,15 @@ function failScenario(error) {
   setMeterState("failed");
 }
 
-/* ───── Gestion des liens .onion ───── */
+/* ───── Gestion des liens .onion ─────
+   Les liens statiques (strip/footer) sont en tor:// directement dans le HTML ;
+   les captures .onion sont converties en tor:// à l'affichage. Le navigateur
+   (Tor Browser, Brave) gère le protocole. */
 
 function isOnionUrl(url) {
   return url && url.includes(".onion");
 }
 
-function handleOnionClick(event, url) {
-  if (onionHandler === "copy") {
-    event.preventDefault();
-    navigator.clipboard.writeText(url).catch(() => {});
-    showToast("Lien .onion copié ! Collez-le dans Tor Browser.");
-  } else if (onionHandler === "tor") {
-    event.preventDefault();
-    const torUrl = "tor://" + url.replace(/^https?:\/\//, "");
-    window.open(torUrl, "_blank", "noreferrer");
-    // tor:// est reconnu par certaines configs Tor Browser
-    // sinon, Brave ouvre les .onion en fenêtre privée Tor
-  }
-  // default: laisser le navigateur gérer (Brave gère .onion nativement)
-}
-
-function showToast(message) {
-  let toast = document.getElementById("onion-toast");
-  if (!toast) {
-    toast = document.createElement("output");
-    toast.id = "onion-toast";
-    toast.className = "toast";
-    document.body.append(toast);
-  }
-  toast.textContent = message;
-  toast.classList.add("toast--show");
-  clearTimeout(toast._hideTimer);
-  toast._hideTimer = setTimeout(() => {
-    toast.classList.remove("toast--show");
-  }, 3000);
+function torHref(url) {
+  return "tor://" + url.replace(/^[a-z]+:\/\//i, "");
 }
