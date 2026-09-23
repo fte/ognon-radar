@@ -188,10 +188,13 @@ const xhrClear = document.querySelector("#xhr-clear");
 if (xhrClear) {
   xhrClear.addEventListener("click", () => {
     pollLog.replaceChildren();
+    xhrTotal = 0; // le compteur repart de zéro pour la session en cours
     const count = document.querySelector("#xhr-count");
     if (count) count.textContent = "0";
   });
 }
+
+/* Liens .onion : href en tor:// — le navigateur (Tor Browser / Brave) gère le protocole. */
 
 renderEndpoints();
 checkHealth();
@@ -639,6 +642,7 @@ function renderResult(item, thumbMap) {
     badge.className = "onion-badge";
     badge.textContent = "\uD83E\uDDC5 Tor";
     title.append(badge);
+    link.href = torHref(item.url); // ouverture via tor:// géré par le navigateur
   }
 
   snippet.textContent = item.snippet || "Aucun extrait disponible.";
@@ -898,8 +902,15 @@ function failScenario(error) {
   setMeterState("failed");
 }
 
-/* ───── Gestion des liens .onion ───── */
+/* ───── Gestion des liens .onion ─────
+   Les liens statiques (strip/footer) sont en tor:// directement dans le HTML ;
+   les captures .onion sont converties en tor:// à l'affichage. Le navigateur
+   (Tor Browser, Brave) gère le protocole. */
 
 function isOnionUrl(url) {
   return url && url.includes(".onion");
+}
+
+function torHref(url) {
+  return "tor://" + url.replace(/^[a-z]+:\/\//i, "");
 }
