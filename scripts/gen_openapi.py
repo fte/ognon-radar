@@ -72,7 +72,25 @@ KEY_ORDER = ["openapi", "info", "servers", "paths", "components", "security", "t
 
 def build_spec() -> dict:
     """Return the OpenAPI document exactly as the app serves it (plus servers)."""
+    import os
+    import tempfile
+
     sys.path.insert(0, str(REPO_ROOT))
+    # Importing the app instantiates its SQLite-backed managers (JobManager,
+    # WebhookManager, client key store) at module level, which opens their DB
+    # stores. Point them at a throwaway temp dir so that import can never fail
+    # on the store itself — e.g. the CI drift check runs a bare container
+    # (--no-deps, no data bind mount) where /app/data may be root-owned and
+    # unwritable for the app user, which crashed with
+    # "sqlite3.OperationalError: unable to open database file". The OpenAPI
+    # document never depends on DB contents, so nothing is masked — this only
+    # relocates where empty DB files get created.
+    from config import settings
+
+    tmpdir = tempfile.mkdtemp(prefix="ognon-openapi-")
+    settings.job_db_path = os.path.join(tmpdir, "jobs.db")
+    settings.webhook_db_path = os.path.join(tmpdir, "webhooks.db")
+
     from main import app  # noqa: E402  (needs repo root on sys.path)
 
     spec = app.openapi()

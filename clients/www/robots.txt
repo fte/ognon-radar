@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Déclaration du sitemap pour Google (Search Console)
+Sitemap: https://dw.13h.be/sitemap.xml

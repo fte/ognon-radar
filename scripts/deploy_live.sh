@@ -57,6 +57,10 @@ SHORT="${HASH:0:7}"
 DATE="$(date -u +'%d/%m/%Y à %Hh%M UTC')"
 sed -i "s|title=\"Développement local\"|style=\"background: hsl($HUE, 60%, 52%)\" title=\"Déployé le $DATE — $SHORT\"|" "$APP_DIR/clients/www/index.html"
 
+echo "[deploy] Bumping frontend cache-busting version"
+sed -i "s|styles.css?v=dev|styles.css?v=$SHORT|" "$APP_DIR/clients/www/index.html"
+sed -i "s|app.js?v=dev|app.js?v=$SHORT|" "$APP_DIR/clients/www/index.html"
+
 echo "[deploy] Ensuring Python virtual environment"
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   python3 -m venv "$VENV_DIR"
