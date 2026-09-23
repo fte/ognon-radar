@@ -146,6 +146,67 @@ def test_falls_back_to_glob_when_driver_questioned_is_empty(tmp_path, monkeypatc
     assert cpw.chromium_installed(cache_root=tmp_path, python="python") is True
 
 
+def _make_headless_shell(tmp_path, name="chromium_headless_shell-1246"):
+    """Create a marker-complete headless-shell directory with an executable."""
+    directory = tmp_path / name
+    (directory / cpw.COMPLETE_MARKER).parent.mkdir(parents=True)
+    (directory / cpw.COMPLETE_MARKER).touch()
+    executable = directory / "chrome-headless-shell-linux64" / "chrome-headless-shell"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    return directory, executable
+
+
+# ── System-library probe (ldd) — binaire présent mais lancement impossible ──
+
+def test_missing_shared_libraries_parses_ldd_output(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc = SimpleNamespace(
+        returncode=0,
+        stdout=(
+            "\tlinux-vdso.so.1 (0x00007fff00000000)\n"
+            "\tlibasound.so.2 => not found\n"
+            "\tlibpango-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libpango-1.0.so.0 (0x00)\n"
+            "\tlibnss3.so => not found\n"
+        ),
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: proc)
+
+    missing = cpw._missing_shared_libraries(pathlib.Path("/fake/chrome-headless-shell"))
+    assert missing == ["libasound.so.2", "libnss3.so"]
+
+
+def test_missing_shared_libraries_skipped_on_non_linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert cpw._missing_shared_libraries(pathlib.Path("/fake/chrome")) == []
+
+
+def test_evaluate_driver_flags_missing_system_libraries(tmp_path, monkeypatch):
+    directory, _ = _make_headless_shell(tmp_path)
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [directory])
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc = SimpleNamespace(returncode=0, stdout="\tlibasound.so.2 => not found\n")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: proc)
+
+    result = cpw.evaluate(cache_root=tmp_path, python="python")
+    assert result.strategy == "driver"
+    assert result.missing_directories == []
+    assert result.missing_libraries == ["libasound.so.2"]
+    assert result.installed is False
+
+
+def test_evaluate_driver_ok_when_system_libraries_present(tmp_path, monkeypatch):
+    directory, _ = _make_headless_shell(tmp_path)
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [directory])
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc = SimpleNamespace(returncode=0, stdout="\tlinux-vdso.so.1 (0x00007fff00000000)\n")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: proc)
+
+    result = cpw.evaluate(cache_root=tmp_path, python="python")
+    assert result.missing_libraries == []
+    assert result.installed is True
+
+
 # ── CLI behavior (main renders evaluate(), must not re-derive the result) ──
 
 def _run_cli(monkeypatch, capsys, result):
@@ -186,6 +247,25 @@ def test_main_precise_path_missing_version(monkeypatch, capsys, tmp_path):
     assert rc == 1
     assert f"{expected}  (MISSING)" in err
     assert "expected revision(s) not installed" in err
+
+
+def test_main_precise_path_missing_system_libraries(monkeypatch, capsys, tmp_path):
+    directory = tmp_path / "chromium_headless_shell-1246"
+    result = cpw.CheckResult(
+        installed=False,
+        strategy="driver",
+        expected_directories=[directory],
+        missing_directories=[],
+        cache_root=tmp_path,
+        missing_libraries=["libasound.so.2"],
+    )
+    rc = _run_cli(monkeypatch, capsys, result)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert f"{directory}  (present)" in err
+    assert "MISSING SYSTEM LIBRARIES" in err
+    assert "playwright install-deps chromium" in err
+    assert "- libasound.so.2" in err
 
 
 def test_main_fallback_path_via_glob(monkeypatch, capsys, tmp_path):
