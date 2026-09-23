@@ -38,23 +38,37 @@ class TorClient:
         logger.info("Created new Tor session with SOCKS5 proxy")
         return self.session
 
-    def check_reachable(self, url: str, connect_timeout: float = 15.0) -> bool:
+    def check_reachable(
+        self,
+        url: str,
+        connect_timeout: float = 15.0,
+        read_timeout: float = 30.0,
+    ) -> bool:
         """Quick reachability probe: True if the server sends any HTTP response.
 
-        ProxyError means Tor failed to establish a circuit (service is down).
-        TimeoutException means the connect window expired — treated as unreachable.
-        Any HTTP status code (200, 403, 404 …) means the server is up.
+        ProxyError means Tor failed to establish a circuit (service is down) —
+        fail fast. ReadTimeoutException means the server accepted the
+        connection but took longer than read_timeout to send its first bytes.
+        Onion sites are often slow-but-up: a fast control site answers in <5 s
+        while a busy market can take ~20 s for the first byte, so the read
+        budget must be generous (30 s default) or capturable targets get
+        rejected. The screenshot/capture stage that follows has its own larger
+        navigation budget (job timeout), so the probe only needs to be
+        permissive, not fast. Any HTTP status code (200, 403, 404 …) means the
+        server is up.
         """
         if not self.session:
             self.create_session()
         try:
-            self.session.get(url, timeout=httpx.Timeout(5.0, connect=connect_timeout))
+            self.session.get(url, timeout=httpx.Timeout(read_timeout, connect=connect_timeout))
             return True
         except httpx.ProxyError:
             logger.debug(f"Tor circuit failed for {url} — service down")
             return False
         except httpx.TimeoutException:
-            logger.debug(f"Connect timeout for {url} — treating as unreachable")
+            logger.debug(
+                f"No response from {url} within {read_timeout:.0f}s — treating as unreachable"
+            )
             return False
         except Exception:
             return False
