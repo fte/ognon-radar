@@ -209,15 +209,60 @@ class TestTorClientCheckReachable:
         client.session.get.return_value = MagicMock(status_code=404)
         assert client.check_reachable(self._ONION) is True
 
-    def test_returns_false_on_proxy_error(self):
+    def _make_probe(self, get_behavior):
+        probe = MagicMock()
+        probe.get.side_effect = get_behavior
+        # `with client._make_client() as probe:` rebinds the name to __enter__()'s
+        # result — point it back at the same mock so .get keeps its behavior.
+        probe.__enter__.return_value = probe
+        return probe
+
+    def test_returns_false_on_proxy_error(self, monkeypatch):
         client = self._make_client()
         client.session.get.side_effect = httpx.ProxyError("circuit failed")
+        renew = MagicMock()
+        monkeypatch.setattr(client, "renew_circuit", renew)
+        probe = self._make_probe(httpx.ProxyError("circuit failed again"))
+        monkeypatch.setattr(client, "_make_client", lambda: probe)
         assert client.check_reachable(self._ONION) is False
+        assert renew.call_count == 1
+        assert probe.get.call_count == 1
 
-    def test_returns_false_on_connect_timeout(self):
+    def test_returns_false_on_connect_timeout(self, monkeypatch):
         client = self._make_client()
         client.session.get.side_effect = httpx.ConnectTimeout("timed out")
+        renew = MagicMock()
+        monkeypatch.setattr(client, "renew_circuit", renew)
+        probe = self._make_probe(httpx.ConnectTimeout("still timing out"))
+        monkeypatch.setattr(client, "_make_client", lambda: probe)
         assert client.check_reachable(self._ONION) is False
+        assert renew.call_count == 1
+        assert probe.get.call_count == 1
+
+    def test_recovers_after_circuit_renewal(self, monkeypatch):
+        """Regression: a bad circuit must not doom a live target — renew + retry."""
+        client = self._make_client()
+        client.session.get.side_effect = httpx.ProxyError("bad circuit")
+        renew = MagicMock()
+        monkeypatch.setattr(client, "renew_circuit", renew)
+        probe = MagicMock()
+        probe.get.return_value = MagicMock(status_code=200)
+        probe.__enter__.return_value = probe
+        monkeypatch.setattr(client, "_make_client", lambda: probe)
+        assert client.check_reachable(self._ONION) is True
+        assert renew.call_count == 1
+        probe.get.assert_called_once()
+
+    def test_retries_exhausted_after_configured_attempts(self, monkeypatch):
+        client = self._make_client()
+        client.session.get.side_effect = httpx.TimeoutException("no first byte")
+        renew = MagicMock()
+        monkeypatch.setattr(client, "renew_circuit", renew)
+        probe = self._make_probe(httpx.TimeoutException("still silent"))
+        monkeypatch.setattr(client, "_make_client", lambda: probe)
+        assert client.check_reachable(self._ONION, retries=2) is False
+        assert renew.call_count == 2
+        assert probe.get.call_count == 2
 
     def test_uses_generous_read_budget_not_5s(self):
         """Regression: a 5s read timeout flunked slow-but-up markets that only
@@ -230,10 +275,14 @@ class TestTorClientCheckReachable:
             self._ONION, timeout=httpx.Timeout(30.0, connect=15.0)
         )
 
-    def test_returns_false_on_generic_exception(self):
+    def test_returns_false_on_generic_exception(self, monkeypatch):
         client = self._make_client()
         client.session.get.side_effect = RuntimeError("unexpected")
+        renew = MagicMock()
+        monkeypatch.setattr(client, "renew_circuit", renew)
         assert client.check_reachable(self._ONION) is False
+        # Non-proxy/timeout errors are not retried.
+        assert renew.call_count == 0
 
 
 # ── SERP reachability filtering ───────────────────────────────────────

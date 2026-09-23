@@ -21,9 +21,9 @@ class TorClient:
         self.proxy_url = proxy_url or settings.tor_proxy
         self.session: Optional[httpx.Client] = None
 
-    def create_session(self) -> httpx.Client:
-        """Create a new httpx.Client configured for the Tor SOCKS5 proxy."""
-        self.session = httpx.Client(
+    def _make_client(self) -> httpx.Client:
+        """Build a configured httpx.Client for the Tor SOCKS5 proxy."""
+        return httpx.Client(
             proxy=self.proxy_url,
             headers={
                 "User-Agent": settings.user_agent,
@@ -35,6 +35,10 @@ class TorClient:
             },
             follow_redirects=True,
         )
+
+    def create_session(self) -> httpx.Client:
+        """Create a new httpx.Client configured for the Tor SOCKS5 proxy."""
+        self.session = self._make_client()
         logger.info("Created new Tor session with SOCKS5 proxy")
         return self.session
 
@@ -43,35 +47,56 @@ class TorClient:
         url: str,
         connect_timeout: float = 15.0,
         read_timeout: float = 30.0,
+        retries: int = 1,
     ) -> bool:
         """Quick reachability probe: True if the server sends any HTTP response.
 
-        ProxyError means Tor failed to establish a circuit (service is down) —
-        fail fast. ReadTimeoutException means the server accepted the
-        connection but took longer than read_timeout to send its first bytes.
-        Onion sites are often slow-but-up: a fast control site answers in <5 s
-        while a busy market can take ~20 s for the first byte, so the read
-        budget must be generous (30 s default) or capturable targets get
-        rejected. The screenshot/capture stage that follows has its own larger
-        navigation budget (job timeout), so the probe only needs to be
-        permissive, not fast. Any HTTP status code (200, 403, 404 …) means the
-        server is up.
+        ProxyError means Tor failed to establish a circuit; ReadTimeoutException
+        means the server accepted the connection but took longer than
+        read_timeout to send its first bytes.  Onion sites are often slow-but-up:
+        a fast control site answers in <5 s while a busy market can take ~20 s
+        for the first byte (some take even longer), so the read budget must be
+        generous (30 s default) or capturable targets get rejected.  The
+        screenshot/capture stage that follows has its own larger navigation
+        budget (job timeout), so the probe only needs to be permissive, not
+        fast.  Any HTTP status code (200, 403, 404 …) means the server is up.
+
+        Onion services are also flaky: a bad circuit can fail a live target, and
+        a slow-but-up service can silently miss the read budget.  When the first
+        probe fails with a proxy/timeout error, the Tor circuit is renewed
+        (``SIGNAL NEWNYM``) and the probe is retried — ``retries`` times,
+        default 1, i.e. up to two probes — before the target is declared
+        unreachable.  Retries run on a dedicated throwaway client so the shared
+        session, which other jobs may be using concurrently (production runs
+        max_workers=2), is never closed or replaced underneath them.
         """
         if not self.session:
             self.create_session()
+        timeout = httpx.Timeout(read_timeout, connect=connect_timeout)
+
         try:
-            self.session.get(url, timeout=httpx.Timeout(read_timeout, connect=connect_timeout))
+            self.session.get(url, timeout=timeout)
             return True
-        except httpx.ProxyError:
-            logger.debug(f"Tor circuit failed for {url} — service down")
-            return False
-        except httpx.TimeoutException:
-            logger.debug(
-                f"No response from {url} within {read_timeout:.0f}s — treating as unreachable"
-            )
-            return False
+        except (httpx.ProxyError, httpx.TimeoutException):
+            logger.debug(f"Initial probe failed for {url} — renewing Tor circuit")
         except Exception:
+            logger.debug(f"Probe failed for {url} with unexpected error")
             return False
+
+        for attempt in range(1, retries + 1):
+            self.renew_circuit()
+            try:
+                with self._make_client() as probe:
+                    probe.get(url, timeout=timeout)
+                return True
+            except (httpx.ProxyError, httpx.TimeoutException):
+                logger.debug(f"Retry {attempt}/{retries} failed for {url} — circuit renewed")
+            except Exception:
+                logger.debug(f"Retry {attempt}/{retries} failed for {url} with unexpected error")
+                return False
+
+        logger.debug(f"Target {url} unreachable after {retries + 1} probe attempts")
+        return False
 
     def test_connection(self) -> bool:
         """Test if Tor connection is working by checking torproject.org."""
