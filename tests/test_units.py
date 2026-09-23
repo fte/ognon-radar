@@ -219,6 +219,17 @@ class TestTorClientCheckReachable:
         client.session.get.side_effect = httpx.ConnectTimeout("timed out")
         assert client.check_reachable(self._ONION) is False
 
+    def test_uses_generous_read_budget_not_5s(self):
+        """Regression: a 5s read timeout flunked slow-but-up markets that only
+        answer after ~20s (observed: 200 in 20.3s / 26.7s). The probe defaults
+        to a generous read budget so capturable targets are not rejected."""
+        client = self._make_client()
+        client.session.get.return_value = MagicMock(status_code=200)
+        assert client.check_reachable(self._ONION) is True
+        client.session.get.assert_called_once_with(
+            self._ONION, timeout=httpx.Timeout(30.0, connect=15.0)
+        )
+
     def test_returns_false_on_generic_exception(self):
         client = self._make_client()
         client.session.get.side_effect = RuntimeError("unexpected")
