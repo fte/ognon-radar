@@ -6,6 +6,7 @@ parsing of `playwright install --dry-run` output, and the decision logic that
 must catch a Playwright upgrade whose expected browser revision is missing
 from disk (the "Executable doesn't exist" production failure).
 """
+import os
 import pathlib
 import subprocess
 import sys
@@ -216,3 +217,100 @@ def test_main_fallback_path_missing(monkeypatch, capsys, tmp_path):
     assert rc == 1
     assert f"Cache root : {tmp_path}" in err
     assert "Status     : Chromium MISSING" in err
+
+
+# ── Cache root resolution (must mirror the driver, incl. PLAYWRIGHT_BROWSERS_PATH=0) ──
+
+def _fake_playwright_package(tmp_path, monkeypatch):
+    """Pretend ``playwright`` is installed on the path (mirrors a real wheel layout)."""
+    from types import ModuleType
+
+    pkg_init = tmp_path / "site" / "playwright" / "__init__.py"
+    pkg_init.parent.mkdir(parents=True)
+    mod = ModuleType("playwright")
+    mod.__file__ = str(pkg_init)
+    monkeypatch.setitem(sys.modules, "playwright", mod)
+    return pkg_init.parent
+
+
+def test_resolve_zero_mode_points_to_package_local_browsers(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+    monkeypatch.delenv("INIT_CWD", raising=False)
+    pkg_dir = _fake_playwright_package(tmp_path, monkeypatch)
+
+    root = cpw._resolve_cache_root()
+    assert root == pkg_dir / "driver" / "package" / ".local-browsers"
+    # Never the literal string "0" as a path.
+    assert root != tmp_path / "0"
+
+
+def test_resolve_zero_mode_unresolvable_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+    monkeypatch.delenv("INIT_CWD", raising=False)
+    monkeypatch.delitem(sys.modules, "playwright", raising=False)
+
+    assert cpw._resolve_cache_root() is None
+
+
+def test_resolve_relative_value_absolute_against_init_cwd(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "browsers")
+    monkeypatch.setenv("INIT_CWD", str(tmp_path))
+    assert cpw._resolve_cache_root() == tmp_path / "browsers"
+
+
+def test_resolve_default_matches_driver_platform_logic(tmp_path, monkeypatch):
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    monkeypatch.delenv("INIT_CWD", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    def resolve(os_name=None, platform_name=None):
+        return cpw._default_registry_directory(os_name=os_name, platform_name=platform_name)
+
+    # Linux: XDG_CACHE_HOME wins.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert resolve("posix", "linux") == tmp_path / "xdg" / "ms-playwright"
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    # Linux without XDG_CACHE_HOME: falls back to ~/.cache.
+    assert resolve("posix", "linux") == pathlib.Path.home() / ".cache" / "ms-playwright"
+    # macOS: fixed ~/Library/Caches/ms-playwright (XDG_CACHE_HOME ignored).
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    assert resolve("posix", "darwin") == pathlib.Path.home() / "Library" / "Caches" / "ms-playwright"
+    # Windows: LOCALAPPDATA wins.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+    assert resolve("nt", "win32") == tmp_path / "appdata" / "ms-playwright"
+
+
+def test_evaluate_zero_mode_fallback_scans_package_local_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+    monkeypatch.delenv("INIT_CWD", raising=False)
+    pkg_dir = _fake_playwright_package(tmp_path, monkeypatch)
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [])
+
+    # A browser installed in Playwright's package-local dir must be found.
+    local_root = pkg_dir / "driver" / "package" / ".local-browsers"
+    binary = local_root / "chromium_headless_shell-1246" / "chrome-headless-shell-linux64" / "chrome-headless-shell"
+    binary.parent.mkdir(parents=True)
+    binary.touch()
+
+    result = cpw.evaluate(cache_root=None, python="python")
+    assert result.installed is True
+    assert result.strategy == "glob"
+    assert result.cache_root == local_root
+
+
+def test_evaluate_zero_mode_unresolvable_disables_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+    monkeypatch.delenv("INIT_CWD", raising=False)
+    monkeypatch.delitem(sys.modules, "playwright", raising=False)
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [])
+
+    def _must_not_run(cache_root):
+        raise AssertionError("glob fallback must be disabled when the cache root is unresolvable")
+
+    monkeypatch.setattr(cpw, "_check_via_glob", _must_not_run)
+
+    result = cpw.evaluate(cache_root=None, python="python")
+    assert result.installed is False
+    assert result.strategy == "unresolved"
+    assert result.cache_root is None

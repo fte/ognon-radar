@@ -55,16 +55,64 @@ COMPLETE_MARKER = "INSTALLATION_COMPLETE"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_cache_root() -> pathlib.Path:
-    """Return the Playwright browser cache directory.
+def _package_local_browsers_root() -> Optional[pathlib.Path]:
+    """Directory Playwright uses when ``PLAYWRIGHT_BROWSERS_PATH=0``.
 
-    Honour the PLAYWRIGHT_BROWSERS_PATH env var (same as Playwright itself),
-    falling back to the default ``~/.cache/ms-playwright``.
+    The driver bundles playwright-core at ``<playwright>/driver/package`` and
+    resolves the special ``0`` value to ``packageRoot/.local-browsers`` (see
+    playwright-core registry/index.ts).  Returns ``None`` when the
+    ``playwright`` package cannot be located.
+    """
+    try:
+        import playwright  # noqa: PLC0415
+    except ImportError:
+        return None
+    package_root = pathlib.Path(playwright.__file__).resolve().parent / "driver" / "package"
+    return package_root / ".local-browsers"
+
+
+def _default_registry_directory(
+    os_name: Optional[str] = None, platform_name: Optional[str] = None
+) -> pathlib.Path:
+    """Mirror the driver's default cache directory (no PLAYWRIGHT_BROWSERS_PATH).
+
+    ``os_name``/``platform_name`` default to the running system but are
+    injectable so every platform branch can be exercised without spoofing
+    module globals (pathlib picks its path class from the real ``os.name``).
+    """
+    os_name = os_name or os.name
+    platform_name = platform_name or sys.platform
+    home = pathlib.Path.home()
+    if os_name == "nt":
+        base = pathlib.Path(os.environ.get("LOCALAPPDATA") or (home / "AppData" / "Local"))
+    elif platform_name == "darwin":
+        base = home / "Library" / "Caches"
+    else:
+        base = pathlib.Path(os.environ.get("XDG_CACHE_HOME") or (home / ".cache"))
+    return base / "ms-playwright"
+
+
+def _resolve_cache_root() -> Optional[pathlib.Path]:
+    """Return the Playwright browser cache directory, mirroring the driver.
+
+    ``PLAYWRIGHT_BROWSERS_PATH=0`` is special in Playwright: it selects the
+    package-local ``.local-browsers`` directory instead of a literal ``0``
+    path.  A relative value is made absolute the same way the driver does
+    (against ``$INIT_CWD`` if set, otherwise the cwd).  Returns ``None`` when
+    the value cannot be resolved — only possible for the ``0`` mode when the
+    ``playwright`` package is not importable; the caller must then treat the
+    check as inconclusive rather than scan a wrong directory.
     """
     raw = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if raw == "0":
+        return _package_local_browsers_root()
     if raw:
-        return pathlib.Path(raw)
-    return pathlib.Path.home() / ".cache" / "ms-playwright"
+        root = pathlib.Path(raw)
+        if not root.is_absolute():
+            base = pathlib.Path(os.environ.get("INIT_CWD") or os.getcwd())
+            root = base / root
+        return root
+    return _default_registry_directory()
 
 
 def _query_expected_directories(python: Optional[str] = None) -> List[pathlib.Path]:
@@ -152,11 +200,12 @@ class CheckResult:
     """
 
     installed: bool
-    # "driver" (revision-precise) or "glob" (version-blind fallback scan).
+    # "driver" (revision-precise), "glob" (version-blind fallback scan), or
+    # "unresolved" (cache root could not be determined — fallback disabled).
     strategy: str
     expected_directories: List[pathlib.Path]
     missing_directories: List[pathlib.Path]
-    cache_root: pathlib.Path
+    cache_root: Optional[pathlib.Path]
 
 
 def evaluate(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = None) -> CheckResult:
@@ -179,6 +228,20 @@ def evaluate(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = 
             expected_directories=list(expected),
             missing_directories=missing,
             cache_root=cache_root,
+        )
+
+    if cache_root is None:
+        # The driver is silent and the browser cache cannot be located
+        # (PLAYWRIGHT_BROWSERS_PATH=0 but the playwright package is not
+        # importable).  Scanning anything would be guessing — report missing
+        # (safe direction: the deploy will run `playwright install chromium`,
+        # which resolves the location itself).
+        return CheckResult(
+            installed=False,
+            strategy="unresolved",
+            expected_directories=[],
+            missing_directories=[],
+            cache_root=None,
         )
 
     return CheckResult(
@@ -212,6 +275,17 @@ def _print_diagnostics(result: CheckResult) -> None:
                 "  Status     : Chromium MISSING — expected revision(s) not installed",
                 file=sys.stderr,
             )
+        return
+    if result.strategy == "unresolved":
+        print(
+            "  Cache root : unresolvable (PLAYWRIGHT_BROWSERS_PATH=0 and "
+            "playwright package not importable)",
+            file=sys.stderr,
+        )
+        print(
+            "  Status     : Chromium MISSING — fallback disabled, cannot verify",
+            file=sys.stderr,
+        )
         return
     # Fallback path (glob scan, revision not verified).
     print(f"  Cache root : {result.cache_root}", file=sys.stderr)
