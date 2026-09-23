@@ -287,7 +287,9 @@ class JobManager(SqliteMixin):
         request_data = {
             **request_data,
             "_job_type": "screenshot",
-            "timeout": min(max(request_data.get("timeout", settings.default_timeout), 10), 120),
+            # Playwright doit charger la page complète (plus lourd qu'un simple
+            # fetch HTML) et les .onion sont lents sur Tor : 90s par défaut.
+            "timeout": min(max(request_data.get("timeout", 90), 10), 120),
         }
         conn = self._get_conn()
         conn.execute(
