@@ -13,13 +13,43 @@ Usage:
 This script is used by scripts/deploy_live.sh to decide whether to
 run `playwright install chromium`.  Keeping the check in a separate
 file makes it easier to test and maintain.
+
+Why a revision-precise check?
+    A version-blind "any chromium exists" check cannot survive a Playwright
+    upgrade: ``pip install -r requirements.txt`` may pull a newer Playwright
+    that expects a different browser revision (chromium_headless_shell-1243,
+    ...) and Playwright never auto-downloads browsers on pip upgrade.  A
+    stale browser left on disk then makes the check pass while the app dies
+    at runtime with::
+
+        BrowserType.launch: Executable doesn't exist at
+        .../ms-playwright/chromium_headless_shell-1243/...
+
+    To match the revision exactly we ask the *installed* driver itself
+    (``playwright install --dry-run chromium``) which directories it
+    expects, then verify Playwright's own ``INSTALLATION_COMPLETE`` marker
+    inside each directory — the same marker ``playwright install`` uses to
+    decide whether a download is already done.
 """
 
 import argparse
 import os
 import pathlib
+import re
+import subprocess
 import sys
-from typing import Optional
+from dataclasses import dataclass
+from typing import List, Optional
+
+# "Install location:" is printed by `playwright install --dry-run` for every
+# browser the command would install (same marker line across playwright
+# 1.49 → current releases).
+_INSTALL_LOCATION_RE = re.compile(r"^\s*Install location:\s*(.+?)\s*$")
+
+# Marker written by playwright inside a browser directory once the download
+# has fully completed (see playwright-core registry/browserFetcher.ts).
+COMPLETE_MARKER = "INSTALLATION_COMPLETE"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,48 +67,61 @@ def _resolve_cache_root() -> pathlib.Path:
     return pathlib.Path.home() / ".cache" / "ms-playwright"
 
 
-# ---------------------------------------------------------------------------
-# Check strategies (tried in order, first match wins)
-# ---------------------------------------------------------------------------
+def _query_expected_directories(python: Optional[str] = None) -> List[pathlib.Path]:
+    """Ask the installed driver which Chromium directories it expects.
 
-def _check_via_internal_api(cache_root: pathlib.Path) -> bool:
+    Runs ``python -m playwright install --dry-run chromium`` — the dry-run
+    output lists exactly the browsers (and their install locations) that
+    ``playwright install chromium`` would download, so the answer is always
+    in sync with the playwright version on disk.  Only directories whose
+    basename starts with ``chromium`` are kept: the dry-run also lists
+    ``ffmpeg`` on some versions, which is not needed for screenshots.
+
+    Returns an empty list when the driver cannot be interrogated.
     """
-    Use Playwright's private ``compute_driver_executable_path`` to get the
-    *exact* expected binary path for the **currently installed** playwright
-    Python package, then check whether that path exists.
-
-    .. caution::
-
-       This uses the private ``playwright._impl._driver`` module which is
-       not part of Playwright's public API and may break across releases.
-       If it does, the fallback in :func:`_check_via_glob` will still work.
-    """
+    executable = python or sys.executable
     try:
-        from playwright._impl._driver import (  # type: ignore[import-untyped]
-            compute_driver_executable_path,
+        proc = subprocess.run(
+            [executable, "-m", "playwright", "install", "--dry-run", "chromium"],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
-    except ImportError:
-        return False
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
 
-    try:
-        expected = pathlib.Path(compute_driver_executable_path())
-        # compute_driver_executable_path already honours PLAYWRIGHT_BROWSERS_PATH
-        # internally via _get_cache_directory, so the returned path is correct
-        # regardless of whether the env var is set.
-        return expected.exists()
-    except Exception:
-        return False
+    directories: List[pathlib.Path] = []
+    seen = set()
+    for line in proc.stdout.splitlines():
+        match = _INSTALL_LOCATION_RE.match(line)
+        if not match:
+            continue
+        directory = pathlib.Path(match.group(1))
+        # Deduplicate: the check result must not depend on the driver
+        # repeating a directory (e.g. chromium listed twice) — the marker
+        # is checked once per unique expected location.
+        if directory in seen:
+            continue
+        seen.add(directory)
+        if directory.name.startswith("chromium"):
+            directories.append(directory)
+    return directories
 
 
 def _check_via_glob(cache_root: pathlib.Path) -> bool:
     """
-    Fallback: scan the Playwright cache for any existing Chromium binary.
+    Last-resort fallback: scan the Playwright cache for any existing Chromium
+    binary.
 
     Tries several known layouts (Linux, macOS, Windows) so the check works
     regardless of the platform.  If none match, returns False.
 
-    This is less precise (any version, not necessarily the one the installed
-    ``playwright`` package expects), but doesn't depend on any private API.
+    This is deliberately **imprecise**: it cannot tell whether the browser it
+    finds matches the revision the installed ``playwright`` package expects,
+    so a stale browser may slip through.  It is only reached when the
+    driver-based check (:func:`evaluate`) could not interrogate the driver.
     """
     patterns = [
         # Linux (headless shell – default for install chromium)
@@ -100,17 +143,86 @@ def _check_via_glob(cache_root: pathlib.Path) -> bool:
     return False
 
 
-def chromium_installed(cache_root: Optional[pathlib.Path] = None) -> bool:
-    """Return ``True`` when the expected Chromium binary exists on disk."""
+@dataclass
+class CheckResult:
+    """Outcome of the Chromium availability check.
+
+    ``installed`` carries the answer; the remaining fields feed the CLI's
+    diagnostics so ``main()`` renders the result instead of re-deriving it.
+    """
+
+    installed: bool
+    # "driver" (revision-precise) or "glob" (version-blind fallback scan).
+    strategy: str
+    expected_directories: List[pathlib.Path]
+    missing_directories: List[pathlib.Path]
+    cache_root: pathlib.Path
+
+
+def evaluate(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = None) -> CheckResult:
+    """Single source of truth: is the expected Chromium browser installed?
+
+    Strategy 1 — revision-precise: ask the installed driver which chromium
+    directories it expects and verify each ``INSTALLATION_COMPLETE`` marker.
+    Strategy 2 — fallback: version-blind directory scan, only when the driver
+    could not be interrogated.
+    """
     if cache_root is None:
         cache_root = _resolve_cache_root()
 
-    # Strategy 1 — precise version check (uses private API).
-    if _check_via_internal_api(cache_root):
-        return True
+    expected = _query_expected_directories(python)
+    if expected:
+        missing = [d for d in expected if not (d / COMPLETE_MARKER).exists()]
+        return CheckResult(
+            installed=not missing,
+            strategy="driver",
+            expected_directories=list(expected),
+            missing_directories=missing,
+            cache_root=cache_root,
+        )
 
-    # Strategy 2 — glob-based fallback (public, but imprecise).
-    return _check_via_glob(cache_root)
+    return CheckResult(
+        installed=_check_via_glob(cache_root),
+        strategy="glob",
+        expected_directories=[],
+        missing_directories=[],
+        cache_root=cache_root,
+    )
+
+
+def chromium_installed(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = None) -> bool:
+    """Return ``True`` when the expected Chromium browser exists on disk."""
+    return evaluate(cache_root, python).installed
+
+
+def _print_diagnostics(result: CheckResult) -> None:
+    """Write human-readable diagnostics to stderr (used by the CLI)."""
+    if result.strategy == "driver":
+        missing = set(result.missing_directories)
+        for directory in result.expected_directories:
+            state = "MISSING" if directory in missing else "present"
+            print(f"  {directory}  ({state})", file=sys.stderr)
+        if result.installed:
+            print(
+                "  Status     : Chromium found (expected revision(s) installed)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "  Status     : Chromium MISSING — expected revision(s) not installed",
+                file=sys.stderr,
+            )
+        return
+    # Fallback path (glob scan, revision not verified).
+    print(f"  Cache root : {result.cache_root}", file=sys.stderr)
+    if result.installed:
+        print(
+            "  Status     : Chromium found (via directory-scan fallback — "
+            "revision NOT verified)",
+            file=sys.stderr,
+        )
+    else:
+        print("  Status     : Chromium MISSING", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -126,19 +238,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    cache_root = _resolve_cache_root()
-    found = chromium_installed(cache_root)
-
+    result = evaluate()
     if args.verbose:
-        print(f"  Cache root : {cache_root}", file=sys.stderr)
-        if found:
-            print("  Status     : Chromium found (version matches)" if _check_via_internal_api(cache_root)
-                  else "  Status     : Chromium found (via directory-scan fallback)",
-                  file=sys.stderr)
-        else:
-            print("  Status     : Chromium MISSING", file=sys.stderr)
-
-    return 0 if found else 1
+        _print_diagnostics(result)
+    return 0 if result.installed else 1
 
 
 if __name__ == "__main__":
