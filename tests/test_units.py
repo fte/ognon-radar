@@ -820,3 +820,35 @@ class TestScreenshotProxy:
         from core.screenshot import _resolve_proxy_url
 
         assert _resolve_proxy_url() == "http://127.0.0.1:8118"
+
+    # ── Guard: empty/invalid values must fail explicitly, not inside ──────
+    # ── an opaque BrowserType.launch error.                          ──────
+
+    def test_empty_settings_proxy_raises(self, _patch_config, monkeypatch):
+        monkeypatch.delenv("TOR_PROXY", raising=False)
+        from config import settings
+        from core.screenshot import _resolve_proxy_url
+
+        original = settings.tor_proxy
+        settings.tor_proxy = ""
+        try:
+            with pytest.raises(RuntimeError, match="Invalid Tor proxy URL"):
+                _resolve_proxy_url()
+        finally:
+            settings.tor_proxy = original
+
+    def test_scheme_less_value_raises(self, _patch_config, monkeypatch):
+        # A bare host:port (easy typo) would silently become an HTTP proxy in
+        # Chromium — reject it so the misconfiguration is named.
+        monkeypatch.setenv("TOR_PROXY", "127.0.0.1:9050")
+        from core.screenshot import _resolve_proxy_url
+
+        with pytest.raises(RuntimeError, match="Expected e.g. socks5h://"):
+            _resolve_proxy_url()
+
+    def test_whitespace_only_value_raises(self, _patch_config, monkeypatch):
+        monkeypatch.setenv("TOR_PROXY", "   ")
+        from core.screenshot import _resolve_proxy_url
+
+        with pytest.raises(RuntimeError, match="Invalid Tor proxy URL"):
+            _resolve_proxy_url()
