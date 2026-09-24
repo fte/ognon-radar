@@ -16,6 +16,10 @@
 
 RUNTIME ?= auto
 
+# Prefer the deployment virtualenv when present (on-premise), otherwise use
+# the host interpreter used by local development or CI.
+OPENAPI_PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+
 # Detect installed CLIs (cheap `command -v` checks, run once at parse time).
 DOCKER_CLI    := $(shell command -v docker >/dev/null 2>&1 && echo yes || echo no)
 CONTAINER_CLI := $(shell command -v container >/dev/null 2>&1 && echo yes || echo no)
@@ -137,20 +141,20 @@ runtime:                    ## Show the detected container backend
 	fi
 
 openapi:                    ## Regenerate openapi.json + openapi.yaml from the FastAPI app
-	@if python3 -c 'import fastapi' >/dev/null 2>&1; then \
-		python3 scripts/gen_openapi.py; \
+	@if $(OPENAPI_PYTHON) -c 'import fastapi, yaml' >/dev/null 2>&1; then \
+		$(OPENAPI_PYTHON) scripts/gen_openapi.py; \
 	else \
-		echo "fastapi is not installed in the host python."; \
-		echo "Run this inside the API container (make shell) or a venv with requirements installed."; \
+		echo "FastAPI and PyYAML are not installed for $(OPENAPI_PYTHON)."; \
+		echo "Install requirements in the active environment, then rerun make openapi."; \
 		exit 1; \
 	fi
 
 openapi-check:              ## Verify openapi.json + openapi.yaml match the app (also runs in CI)
-	@if python3 -c 'import fastapi' >/dev/null 2>&1; then \
-		python3 scripts/gen_openapi.py --check; \
+	@if $(OPENAPI_PYTHON) -c 'import fastapi, yaml' >/dev/null 2>&1; then \
+		$(OPENAPI_PYTHON) scripts/gen_openapi.py --check; \
 	else \
-		echo "fastapi is not installed in the host python."; \
-		echo "Run this inside the API container (make shell) or a venv with requirements installed."; \
+		echo "FastAPI and PyYAML are not installed for $(OPENAPI_PYTHON)."; \
+		echo "Install requirements in the active environment, then rerun make openapi-check."; \
 		exit 1; \
 	fi
 

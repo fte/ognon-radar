@@ -23,11 +23,15 @@ When generating documentation, checklists, or example commands intended for shar
 - **Pagination**: Use `limit` and `offset` for large result sets
 - **Versioning**: All endpoints use `/api/v1/` prefix
 
-### 2. Docker-Only Environment
-- **NO local installation**: Everything runs in Docker containers
-- **Use docker-compose.yml**: Define all services (API, Tor, Redis if needed)
+### 2. Environment Split
+- **Local development and CI**: Use Docker/Compose for the API and Tor services.
+- **Production**: Use the native on-premise deployment managed by systemd; the
+  API runs from `.venv` and Tor is a host service. Do not assume Docker exists
+  in production.
 - **YAML configuration**: All settings in `config.yaml` (no environment variables)
-- **Tor proxy**: Run Tor in a separate container, API connects via SOCKS5 proxy
+- **Tor proxy locally**: Run Tor in a separate container and connect via the
+  Compose service name. In production use the host Tor address from the active
+  production config.
 
 ### 3. Code Organization
 ```
@@ -160,7 +164,8 @@ Capture screenshot of a .onion site.
 - Test all endpoints with curl or Postman
 - Verify Tor connectivity before crawling
 - Test error scenarios (timeout, invalid URL, etc.)
-- Use `docker-compose up` to test full stack
+- Use `docker-compose up` to test the local full stack; production checks use
+  systemd, the local health endpoint, and the production config.
 
 ## Common Patterns
 
@@ -217,7 +222,7 @@ crawling:
   max_pages: 50
 ```
 
-## Docker Commands
+## Local Docker Commands
 
 ### Build and Run
 ```bash
@@ -294,4 +299,7 @@ nano config.yaml
 
 ---
 
-**Remember**: This is a Docker-only environment. All code must work within containers. Never assume local file system access or localhost connectivity between services.
+**Remember**: Docker is the local development/CI runtime only. Production is a
+native on-premise systemd deployment with a Python virtual environment and a
+host Tor service. Keep Docker service names such as `tor:9050` limited to the
+Compose environment.

@@ -11,7 +11,8 @@
   <img src="https://img.shields.io/badge/python-3.11-blue?logo=python&style=flat-square" alt="python">
 </p>
 
-RESTful API for searching .onion (Tor hidden services) sites. Built with FastAPI and Docker.
+RESTful API for searching .onion (Tor hidden services) sites. Built with FastAPI,
+Docker for local development/CI, and a native on-premise production deployment.
 
 ## 🎯 Features
 
@@ -19,7 +20,7 @@ RESTful API for searching .onion (Tor hidden services) sites. Built with FastAPI
 - **Tor Integration**: All traffic routed through Tor SOCKS5 proxy for anonymity
 - **BFS Crawling**: Breadth-first search algorithm for efficient site discovery
 - **Search Functionality**: Find .onion sites containing specific keywords
-- **Docker-First**: Everything runs in containers (API + Tor)
+- **Two runtimes**: Docker/Compose locally and in CI; systemd plus host Tor on-premise
 - **Fully Typed**: Type hints throughout for better IDE support
 
 ## 🚀 Quick Start
@@ -171,9 +172,17 @@ Security-model notes:
 hand-written:
 
 ```bash
-make openapi          # regenerate both files from the FastAPI app
-make openapi-check    # fail if the committed files are stale (runs in CI too)
+make openapi          # regenerate both files; uses .venv/bin/python when present
+make openapi-check    # fail if the committed files are stale (also runs in CI)
 ```
+
+Docker/Compose is the local development and CI runtime. Production is deployed
+on-premise without Docker, using systemd and the deployment virtual environment
+(`.venv`). On a production host, run the same commands from the repository after
+the deployment dependencies are installed. Both generated files must be
+committed before deployment; the live deployment verifies them and fails if they
+are missing or stale. FastAPI serves `/openapi.json`; `openapi.yaml` remains the
+versioned YAML artifact unless a separate static route is configured.
 
 Any route or response-model change must be committed together with a regenerated
 contract — the CI tests workflow runs `scripts/gen_openapi.py --check` on every
@@ -248,8 +257,7 @@ docker-compose up
 
 ### Running Tests
 
-This project is **Docker-only** — there is no local Python environment.
-All tests run inside the API container:
+For local development and CI, tests run inside the API container:
 
 ```bash
 make test
