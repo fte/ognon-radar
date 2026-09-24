@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 
@@ -105,6 +106,26 @@ class TestHealth:
         data = resp.json()
         assert "endpoints" in data
         assert "jobs" in data["endpoints"]
+
+
+# ── OpenAPI YAML ─────────────────────────────────────────────────
+
+
+class TestOpenAPIYaml:
+    @pytest.mark.parametrize("path", ["/openapi.yaml", "/openapi.yml"])
+    def test_serves_openapi_yaml(self, client, path):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/yaml"
+        data = yaml.safe_load(resp.text)
+        assert data["openapi"].startswith("3.")
+        assert isinstance(data["paths"], dict) and len(data["paths"]) > 0
+        assert "/api/v1/search" in data["paths"]
+
+    def test_matches_committed_file(self, client):
+        from pathlib import Path
+        committed = (Path(__file__).resolve().parent.parent / "openapi.yaml").read_bytes()
+        assert client.get("/openapi.yml").content == committed
 
 
 # ── Search (job submission) ─────────────────────────────────────────
