@@ -38,7 +38,7 @@ import pathlib
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 # "Install location:" is printed by `playwright install --dry-run` for every
@@ -49,6 +49,25 @@ _INSTALL_LOCATION_RE = re.compile(r"^\s*Install location:\s*(.+?)\s*$")
 # Marker written by playwright inside a browser directory once the download
 # has fully completed (see playwright-core registry/browserFetcher.ts).
 COMPLETE_MARKER = "INSTALLATION_COMPLETE"
+
+# Executable layouts per platform, matching what `playwright install` produces
+# inside a browser directory.  Used both by the version-blind fallback scan
+# (_check_via_glob) and by the system-library probe (_find_executables), so the
+# two always agree on where a binary lives.
+_EXECUTABLE_PATTERNS = [
+    # Linux (headless shell – default for install chromium)
+    "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+    # Linux (full Chromium)
+    "chromium-*/chrome-linux/chrome",
+    # macOS
+    "chromium_headless_shell-*/chrome-headless-shell-mac-arm64/chrome-headless-shell",
+    "chromium_headless_shell-*/chrome-headless-shell-mac-x64/chrome-headless-shell",
+    "chromium-*/chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium",
+    "chromium-*/chrome-mac-x64/Chromium.app/Contents/MacOS/Chromium",
+    # Windows (WSL / cross-platform)
+    "chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe",
+    "chromium-*/chrome-win64/chrome.exe",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +177,19 @@ def _query_expected_directories(python: Optional[str] = None) -> List[pathlib.Pa
     return directories
 
 
+def _fallback_executables(cache_root: pathlib.Path) -> List[pathlib.Path]:
+    """Every Chromium binary the version-blind glob scan finds under cache_root.
+
+    Single source of truth for both the fallback's existence check
+    (:func:`_check_via_glob`) and its system-library probe — the two must
+    always agree on which binaries the fallback considered.
+    """
+    found: List[pathlib.Path] = []
+    for pattern in _EXECUTABLE_PATTERNS:
+        found.extend(cache_root.glob(pattern))
+    return sorted(set(found))
+
+
 def _check_via_glob(cache_root: pathlib.Path) -> bool:
     """
     Last-resort fallback: scan the Playwright cache for any existing Chromium
@@ -170,25 +202,64 @@ def _check_via_glob(cache_root: pathlib.Path) -> bool:
     finds matches the revision the installed ``playwright`` package expects,
     so a stale browser may slip through.  It is only reached when the
     driver-based check (:func:`evaluate`) could not interrogate the driver.
+    Note that "found" means "a binary exists" — :func:`evaluate` still runs
+    the shared-library probe on it before declaring success.
     """
-    patterns = [
-        # Linux (headless shell – default for install chromium)
-        "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
-        # Linux (full Chromium)
-        "chromium-*/chrome-linux/chrome",
-        # macOS
-        "chromium_headless_shell-*/chrome-headless-shell-mac-arm64/chrome-headless-shell",
-        "chromium_headless_shell-*/chrome-headless-shell-mac-x64/chrome-headless-shell",
-        "chromium-*/chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium",
-        "chromium-*/chrome-mac-x64/Chromium.app/Contents/MacOS/Chromium",
-        # Windows (WSL / cross-platform)
-        "chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe",
-        "chromium-*/chrome-win64/chrome.exe",
-    ]
-    for pattern in patterns:
-        if sorted(cache_root.glob(pattern)):
-            return True
-    return False
+    return bool(_fallback_executables(cache_root))
+
+
+def _find_executables(directory: pathlib.Path) -> List[pathlib.Path]:
+    """Locate the Chromium binary(ies) inside a single browser directory.
+
+    The executable patterns are expressed relative to the cache root (they
+    include the ``chromium_headless_shell-*`` revision prefix), so glob the
+    parent — the actual browser cache root — and keep only matches that fall
+    under ``directory``.
+    """
+    found: List[pathlib.Path] = []
+    for pattern in _EXECUTABLE_PATTERNS:
+        for match in directory.parent.glob(pattern):
+            if match.is_relative_to(directory):
+                found.append(match)
+    return sorted(found)
+
+
+def _missing_shared_libraries(executable: pathlib.Path) -> List[str]:
+    """Return system libraries the binary needs but cannot load (Linux only).
+
+    ``playwright install chromium`` only downloads binaries — the OS-level
+    dependencies come from ``playwright install-deps chromium`` (apt-get).  A
+    present ``INSTALLATION_COMPLETE`` marker therefore does not mean the
+    browser can actually launch: on a minimal host a missing lib (e.g.
+    ``libasound.so.2``) makes the screenshot job die at
+    ``BrowserType.launch``, as seen in production:
+
+        error while loading shared libraries: libasound.so.2:
+        cannot open shared object file: No such file or directory
+
+    Run ``ldd`` on the binary and collect every dependency reported as
+    "not found".  Returns an empty list when ``ldd`` is unavailable (the
+    check cannot judge — it must not block the deploy on that basis) or on
+    non-Linux platforms.
+    """
+    if sys.platform != "linux" or os.name != "posix":
+        return []
+    try:
+        proc = subprocess.run(
+            ["ldd", str(executable)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    missing: List[str] = []
+    for line in proc.stdout.splitlines():
+        if "not found" in line:
+            name = line.split("=>")[0].strip()
+            if name:
+                missing.append(name)
+    return missing
 
 
 @dataclass
@@ -206,6 +277,12 @@ class CheckResult:
     expected_directories: List[pathlib.Path]
     missing_directories: List[pathlib.Path]
     cache_root: Optional[pathlib.Path]
+    # System libraries (e.g. libasound.so.2) an installed binary cannot
+    # load.  Non-empty when a binary is present but unlaunchable — the
+    # actionable fix is `playwright install-deps chromium`.  Filled by BOTH
+    # strategies: the revision-precise driver branch and the version-blind
+    # glob fallback (a silent driver must not turn the ldd probe off).
+    missing_libraries: List[str] = field(default_factory=list)
 
 
 def evaluate(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = None) -> CheckResult:
@@ -213,8 +290,15 @@ def evaluate(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = 
 
     Strategy 1 — revision-precise: ask the installed driver which chromium
     directories it expects and verify each ``INSTALLATION_COMPLETE`` marker.
-    Strategy 2 — fallback: version-blind directory scan, only when the driver
-    could not be interrogated.
+    When every marker is present, additionally probe (Linux only) that the
+    binary can actually be launched — a missing system library such as
+    ``libasound.so.2`` makes the marker lie.  Strategy 2 — fallback:
+    version-blind directory scan, only when the driver could not be
+    interrogated.  The fallback runs the same ldd probe on every binary it
+    finds: a silent driver must not disable the launchability check, or the
+    deploy would skip ``install-deps`` for a browser present on disk but
+    unable to start (the original production failure this script guards
+    against).
     """
     if cache_root is None:
         cache_root = _resolve_cache_root()
@@ -222,12 +306,19 @@ def evaluate(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = 
     expected = _query_expected_directories(python)
     if expected:
         missing = [d for d in expected if not (d / COMPLETE_MARKER).exists()]
+        missing_libraries: List[str] = []
+        for directory in expected:
+            if directory in missing:
+                continue
+            for executable in _find_executables(directory):
+                missing_libraries.extend(_missing_shared_libraries(executable))
         return CheckResult(
-            installed=not missing,
+            installed=not missing and not missing_libraries,
             strategy="driver",
             expected_directories=list(expected),
             missing_directories=missing,
             cache_root=cache_root,
+            missing_libraries=sorted(set(missing_libraries)),
         )
 
     if cache_root is None:
@@ -244,12 +335,24 @@ def evaluate(cache_root: Optional[pathlib.Path] = None, python: Optional[str] = 
             cache_root=None,
         )
 
+    # Fallback: the driver could not be interrogated, so the revision cannot
+    # be verified — but launchability still can.  Run the same ldd probe as
+    # the driver branch on every candidate binary.  Conservative on purpose:
+    # ANY binary with a missing library fails the check, and the deploy then
+    # runs `playwright install-deps chromium`, which repairs every revision
+    # on disk at once.  On non-Linux platforms (or when ldd is unavailable)
+    # the probe is a no-op and the result degrades to the old behaviour.
+    missing_libraries: List[str] = []
+    for executable in _fallback_executables(cache_root):
+        missing_libraries.extend(_missing_shared_libraries(executable))
+
     return CheckResult(
-        installed=_check_via_glob(cache_root),
+        installed=_check_via_glob(cache_root) and not missing_libraries,
         strategy="glob",
         expected_directories=[],
         missing_directories=[],
         cache_root=cache_root,
+        missing_libraries=sorted(set(missing_libraries)),
     )
 
 
@@ -270,6 +373,14 @@ def _print_diagnostics(result: CheckResult) -> None:
                 "  Status     : Chromium found (expected revision(s) installed)",
                 file=sys.stderr,
             )
+        elif result.missing_libraries:
+            print(
+                "  Status     : Chromium present but MISSING SYSTEM LIBRARIES — "
+                "run 'playwright install-deps chromium'",
+                file=sys.stderr,
+            )
+            for lib in result.missing_libraries:
+                print(f"    - {lib}", file=sys.stderr)
         else:
             print(
                 "  Status     : Chromium MISSING — expected revision(s) not installed",
@@ -289,7 +400,15 @@ def _print_diagnostics(result: CheckResult) -> None:
         return
     # Fallback path (glob scan, revision not verified).
     print(f"  Cache root : {result.cache_root}", file=sys.stderr)
-    if result.installed:
+    if result.missing_libraries:
+        print(
+            "  Status     : Chromium present but MISSING SYSTEM LIBRARIES — "
+            "run 'playwright install-deps chromium'",
+            file=sys.stderr,
+        )
+        for lib in result.missing_libraries:
+            print(f"    - {lib}", file=sys.stderr)
+    elif result.installed:
         print(
             "  Status     : Chromium found (via directory-scan fallback — "
             "revision NOT verified)",

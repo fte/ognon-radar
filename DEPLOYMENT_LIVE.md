@@ -22,10 +22,15 @@ Allow deploy user to restart service without password prompt:
 
 ```bash
 cat >/etc/sudoers.d/ognon-radar-deploy <<'EOF'
-<DEPLOY_USER> ALL=(root) NOPASSWD:/usr/bin/tee /etc/systemd/system/ognon-radar-api.service,/bin/systemctl daemon-reload,/bin/systemctl enable ognon-radar-api.service,/bin/systemctl restart ognon-radar-api.service,/bin/systemctl status ognon-radar-api.service
+<DEPLOY_USER> ALL=(root) NOPASSWD:/usr/bin/tee /etc/systemd/system/ognon-radar-api.service,/bin/systemctl daemon-reload,/bin/systemctl enable ognon-radar-api.service,/bin/systemctl restart ognon-radar-api.service,/bin/systemctl status ognon-radar-api.service,/usr/bin/apt-get
 EOF
 chmod 440 /etc/sudoers.d/ognon-radar-deploy
 ```
+
+The `/usr/bin/apt-get` rule is required by the deploy script: when
+`scripts/check_playwright.py` detects a browser whose system libraries are
+missing, it runs `playwright install-deps chromium`, which invokes apt-get
+as root.
 
 Tor should listen on `127.0.0.1:9050`.
 
@@ -131,4 +136,66 @@ curl -fsS http://127.0.0.1:8000/api/v1/health
 curl -fsS https://<API_FQDN>/api/v1/health
 curl -fsS https://<API_FQDN>/docs >/dev/null
 ```
+
+## 10) Troubleshooting — screenshot jobs fail at browser launch
+
+Symptom (job error visible on `GET /api/v1/jobs/{job_id}`, surfaced as an
+XHR failure in the web client):
+
+```
+BrowserType.launch: Target page, context or browser has been closed
+... error while loading shared libraries: libasound.so.2:
+cannot open shared object file: No such file or directory
+```
+
+Cause: `playwright install chromium` only downloads the browser binary;
+OS-level libraries come from `playwright install-deps chromium` (apt-get).
+The binary is present, so revision checks pass, but it cannot load — every
+screenshot job dies at `BrowserType.launch`.
+
+One-time fix on the VPS:
+
+```bash
+# Diagnose: lists the exact libraries the binary cannot load
+<APP_DIR>/.venv/bin/python scripts/check_playwright.py --verbose
+
+# Install the missing OS libraries (as root, or as deploy user with the
+# apt-get NOPASSWD rule from step 1)
+sudo <APP_DIR>/.venv/bin/python -m playwright install-deps chromium
+
+sudo systemctl restart ognon-radar-api.service
+```
+
+Then resubmit the screenshot job — failed jobs are terminal, there is no
+server-side retry endpoint (only webhook deliveries have one).
+
+Note: future deploys self-heal this (the deploy script runs the same check
+and installs deps automatically), but only if the apt-get sudo rule above
+is in place — otherwise the deploy aborts with "Failed to install Playwright
+system dependencies".
+
+### Screenshot jobs fail with "Screenshot failed for <url>" (browser launches)
+
+If the browser now launches but every screenshot still fails while the
+reachability probe (curl/httpx through the same Tor proxy) succeeds, check
+which proxy Chromium is being given.  ``core/screenshot.py`` resolves it
+from ``TOR_PROXY`` (scripts/container) or ``tor.proxy`` in the active
+config, and normalizes ``socks5h://`` to ``socks5://`` (the only SOCKS
+scheme Chromium's ``--proxy-server`` understands; Chrome always resolves
+names proxy-side anyway).
+
+A historical bug shipped a hard-coded default of ``socks5://tor:9050``:
+under systemd there is no ``TOR_PROXY`` env and the ``tor`` hostname does
+not resolve on a native VPS, so navigation failed in every job.  Verify the
+resolution with the production config:
+
+```bash
+APP_CONFIG_PATH="$APP_DIR/config.live.yaml" \
+  "$APP_DIR/.venv/bin/python" -c \
+  'from config import settings; from core.screenshot import _resolve_proxy_url; print(settings.tor_proxy, "->", _resolve_proxy_url())'
+```
+
+Expected on the VPS: ``socks5h://127.0.0.1:9050 -> socks5://127.0.0.1:9050``.
+If it prints ``tor:9050``, the service is not using ``config.live.yaml`` —
+check the ``APP_CONFIG_PATH`` env in the systemd unit.
 
