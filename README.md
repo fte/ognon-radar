@@ -181,8 +181,9 @@ on-premise without Docker, using systemd and the deployment virtual environment
 (`.venv`). On a production host, run the same commands from the repository after
 the deployment dependencies are installed. Both generated files must be
 committed before deployment; the live deployment verifies them and fails if they
-are missing or stale. FastAPI serves `/openapi.json`; `openapi.yaml` remains the
-versioned YAML artifact unless a separate static route is configured.
+are missing or stale. FastAPI serves `/openapi.json` natively, and the
+committed YAML contract is served from a static route at both
+`/openapi.yaml` and `/openapi.yml` (same document, either extension).
 
 Any route or response-model change must be committed together with a regenerated
 contract — the CI tests workflow runs `scripts/gen_openapi.py --check` on every
