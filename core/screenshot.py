@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from types import TracebackType
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,11 @@ def _resolve_proxy_url() -> str:
     the proxy side anyway.  Resolution happens at call time (not import
     time) so a patched ``config.settings`` is honoured in tests.
 
+    Raises RuntimeError on an empty or scheme-less value: handed to Chromium
+    as-is it would surface much later as an opaque ``BrowserType.launch``
+    error, while the job error would just read "Screenshot failed".  Failing
+    here names the actual misconfiguration instead.
+
     History: this used to be a module-level constant defaulting to
     ``socks5://tor:9050``.  On the native VPS deployment nothing sets
     ``TOR_PROXY`` and the ``tor`` hostname does not resolve, so every
@@ -54,7 +60,17 @@ def _resolve_proxy_url() -> str:
         from config import settings  # local import: tests monkeypatch it
 
         url = settings.tor_proxy
-    if url.startswith("socks5h://"):
+
+    url = (url or "").strip()
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise RuntimeError(
+            "Invalid Tor proxy URL for Chromium "
+            f"(TOR_PROXY env or tor.proxy config): {url!r}. "
+            "Expected e.g. socks5h://127.0.0.1:9050."
+        )
+
+    if parsed.scheme == "socks5h":
         url = "socks5://" + url[len("socks5h://"):]
     return url
 
