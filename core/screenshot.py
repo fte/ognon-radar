@@ -21,10 +21,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# TOR_PROXY is set by scripts/container / deploy to tor's real IP (the vmnet
-# network does not resolve container names); default matches config.yaml's
-# value and only works under Docker's embedded DNS.
-_PROXY = {"server": os.getenv("TOR_PROXY", "socks5://tor:9050")}
 _LAUNCH_ARGS = [
     "--disable-dev-shm-usage",
     "--no-sandbox",               # Required in containers — Chrome sandbox needs kernel support absent in containers
@@ -32,8 +28,39 @@ _LAUNCH_ARGS = [
 ]
 
 
+def _resolve_proxy_url() -> str:
+    """Proxy URL Chromium should use, resolved at launch time.
+
+    Priority:
+      1. ``TOR_PROXY`` env var — set by scripts/container to tor's real IP
+         (Apple's vmnet network does not resolve container names).
+      2. ``settings.tor_proxy`` from the active config — ``socks5h://tor:9050``
+         under Docker/dev, ``socks5h://127.0.0.1:9050`` on the native VPS
+         deployment (config.live.yaml).
+
+    Chromium only understands the ``socks5://`` scheme, so ``socks5h://`` is
+    normalized — same SOCKSv5 protocol, and Chrome always resolves names on
+    the proxy side anyway.  Resolution happens at call time (not import
+    time) so a patched ``config.settings`` is honoured in tests.
+
+    History: this used to be a module-level constant defaulting to
+    ``socks5://tor:9050``.  On the native VPS deployment nothing sets
+    ``TOR_PROXY`` and the ``tor`` hostname does not resolve, so every
+    screenshot job died at ``BrowserType.launch`` with a navigation failure
+    while the reachability probe (httpx via settings.tor_proxy) succeeded.
+    """
+    url = os.getenv("TOR_PROXY", "")
+    if not url:
+        from config import settings  # local import: tests monkeypatch it
+
+        url = settings.tor_proxy
+    if url.startswith("socks5h://"):
+        url = "socks5://" + url[len("socks5h://"):]
+    return url
+
+
 async def _launch_browser(pw):
-    return await pw.chromium.launch(proxy=_PROXY, args=_LAUNCH_ARGS)
+    return await pw.chromium.launch(proxy={"server": _resolve_proxy_url()}, args=_LAUNCH_ARGS)
 
 
 async def _take(browser, url: str, output_path: Path, timeout_ms: int) -> bool:
@@ -130,4 +157,12 @@ def take_screenshot(url: str, output_path: Path, timeout_ms: int = 15000) -> boo
             finally:
                 await browser.close()
 
-    return asyncio.run(run())
+    try:
+        return asyncio.run(run())
+    except Exception as exc:
+        # _take swallows navigation errors (returns False); anything raising
+        # here is a launch/cleanup failure.  Re-raise with the underlying
+        # message so the job error shows the real cause (e.g. missing system
+        # library, unreachable proxy) instead of a bare "Screenshot failed".
+        logger.warning(f"Screenshot failed for {url}: {exc}")
+        raise RuntimeError(f"Screenshot failed for {url}: {exc}") from exc

@@ -779,3 +779,44 @@ class TestRateLimiterInstance:
             body = resp2.json()
             # slowapi returns {error: ...} key, not {detail: ...}
             assert "rate limit exceeded" in body.get("error", "").lower()
+
+
+# ── Screenshot proxy resolution ─────────────────────────────────────────
+
+
+class TestScreenshotProxy:
+    """core.screenshot._resolve_proxy_url — the proxy Chromium gets at launch.
+
+    Regression guard: the proxy used to be a module-level constant defaulting
+    to socks5://tor:9050.  On the native VPS deployment (systemd, no Docker,
+    no TOR_PROXY env) that hostname does not resolve, so every screenshot job
+    failed at BrowserType.launch even though the httpx reachability probe —
+    which uses settings.tor_proxy — succeeded.
+    """
+
+    def test_env_var_wins_over_settings(self, _patch_config, monkeypatch):
+        monkeypatch.setenv("TOR_PROXY", "socks5://10.0.0.9:9050")
+        from core.screenshot import _resolve_proxy_url
+
+        assert _resolve_proxy_url() == "socks5://10.0.0.9:9050"
+
+    def test_falls_back_to_settings_proxy(self, _patch_config, monkeypatch):
+        # _patch_config sets tor.proxy = socks5h://127.0.0.1:9050 (VPS-style config)
+        monkeypatch.delenv("TOR_PROXY", raising=False)
+        from core.screenshot import _resolve_proxy_url
+
+        assert _resolve_proxy_url() == "socks5://127.0.0.1:9050"
+
+    def test_socks5h_normalized_for_chromium(self, _patch_config, monkeypatch):
+        # Chromium's --proxy-server only understands socks5://; socks5h:// would
+        # make navigation fail.  Chrome resolves names proxy-side regardless.
+        monkeypatch.setenv("TOR_PROXY", "socks5h://tor:9050")
+        from core.screenshot import _resolve_proxy_url
+
+        assert _resolve_proxy_url() == "socks5://tor:9050"
+
+    def test_non_socks5_url_passthrough(self, _patch_config, monkeypatch):
+        monkeypatch.setenv("TOR_PROXY", "http://127.0.0.1:8118")
+        from core.screenshot import _resolve_proxy_url
+
+        assert _resolve_proxy_url() == "http://127.0.0.1:8118"
