@@ -70,3 +70,6 @@ ognon-jobs/*
 
 # Freebuff local state
 .freebuff/
+AGENTS.md
+CLAUDE.md
+todo.md

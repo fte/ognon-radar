@@ -165,3 +165,30 @@ jobs:
             find "$WWW_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
             cp -a "$APP_DIR/clients/www/." "$WWW_DIR/"
             echo "[deploy] Web client deployed"
+
+      - name: Generate OpenAPI artifacts on production
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_SSH_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          port: ${{ secrets.VPS_SSH_PORT || '22' }}
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.VPS_PATH }}"
+            cd "$APP_DIR"
+
+            if [[ ! -x .venv/bin/python ]]; then
+              echo "Production virtualenv not found: $APP_DIR/.venv/bin/python"
+              exit 1
+            fi
+
+            CONFIG_PATH="config.yaml"
+            if [[ -f config.live.yaml ]]; then
+              CONFIG_PATH="config.live.yaml"
+            fi
+
+            echo "[deploy] Regenerating OpenAPI JSON and YAML"
+            APP_CONFIG_PATH="$CONFIG_PATH" .venv/bin/python scripts/gen_openapi.py
+            echo "[deploy] OpenAPI artifacts generated"

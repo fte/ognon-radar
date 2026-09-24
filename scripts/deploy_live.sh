@@ -75,6 +75,9 @@ echo "[deploy] Installing dependencies"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 
+echo "[deploy] Verifying OpenAPI artifacts"
+"$VENV_DIR/bin/python" scripts/gen_openapi.py --check
+
 echo "[deploy] Checking Playwright Chromium browser"
 # cd "$APP_DIR" was already executed above, so the relative path is safe
 if "$VENV_DIR/bin/python" scripts/check_playwright.py --verbose 2>&1; then
