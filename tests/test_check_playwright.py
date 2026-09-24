@@ -146,6 +146,73 @@ def test_falls_back_to_glob_when_driver_questioned_is_empty(tmp_path, monkeypatc
     assert cpw.chromium_installed(cache_root=tmp_path, python="python") is True
 
 
+# ── System-library probe in the glob fallback — a silent driver must not ────
+# ── disable the ldd check (the deploy would skip `install-deps`).        ────
+
+def test_glob_fallback_flags_missing_system_libraries(tmp_path, monkeypatch):
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [])
+    _make_headless_shell(tmp_path)
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc = SimpleNamespace(returncode=0, stdout="\tlibasound.so.2 => not found\n")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: proc)
+
+    result = cpw.evaluate(cache_root=tmp_path, python="python")
+    assert result.strategy == "glob"
+    assert result.missing_libraries == ["libasound.so.2"]
+    assert result.installed is False
+
+
+def test_glob_fallback_ok_when_system_libraries_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [])
+    _make_headless_shell(tmp_path)
+    monkeypatch.setattr(sys, "platform", "linux")
+    proc = SimpleNamespace(returncode=0, stdout="\tlinux-vdso.so.1 (0x00007fff00000000)\n")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: proc)
+
+    result = cpw.evaluate(cache_root=tmp_path, python="python")
+    assert result.strategy == "glob"
+    assert result.missing_libraries == []
+    assert result.installed is True
+
+
+def test_glob_fallback_probes_every_candidate_binary(tmp_path, monkeypatch):
+    # One healthy binary must not mask a second, broken one.
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [])
+    _make_headless_shell(tmp_path, name="chromium_headless_shell-1246")
+    broken = tmp_path / "chromium-1100" / "chrome-linux" / "chrome"
+    broken.parent.mkdir(parents=True)
+    broken.touch()
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    ldd_calls = []
+
+    def fake_ldd(cmd, **kwargs):
+        ldd_calls.append(cmd[1])
+        return SimpleNamespace(returncode=0, stdout="\tlibnss3.so => not found\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_ldd)
+
+    result = cpw.evaluate(cache_root=tmp_path, python="python")
+    assert len(ldd_calls) == 2  # both binaries probed
+    assert result.missing_libraries == ["libnss3.so"]
+    assert result.installed is False
+
+
+def test_glob_fallback_no_probe_on_non_linux(tmp_path, monkeypatch):
+    monkeypatch.setattr(cpw, "_query_expected_directories", lambda python=None: [])
+    _make_headless_shell(tmp_path)
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("ldd must not run on non-Linux platforms")
+
+    monkeypatch.setattr(subprocess, "run", _must_not_run)
+
+    result = cpw.evaluate(cache_root=tmp_path, python="python")
+    assert result.installed is True
+    assert result.missing_libraries == []
+
+
 def _make_headless_shell(tmp_path, name="chromium_headless_shell-1246"):
     """Create a marker-complete headless-shell directory with an executable."""
     directory = tmp_path / name
@@ -282,6 +349,23 @@ def test_main_fallback_path_via_glob(monkeypatch, capsys, tmp_path):
     assert f"Cache root : {tmp_path}" in err
     assert "directory-scan fallback" in err
     assert "revision NOT verified" in err
+
+
+def test_main_fallback_path_missing_system_libraries(monkeypatch, capsys, tmp_path):
+    result = cpw.CheckResult(
+        installed=False,
+        strategy="glob",
+        expected_directories=[],
+        missing_directories=[],
+        cache_root=tmp_path,
+        missing_libraries=["libasound.so.2"],
+    )
+    rc = _run_cli(monkeypatch, capsys, result)
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "MISSING SYSTEM LIBRARIES" in err
+    assert "playwright install-deps chromium" in err
+    assert "- libasound.so.2" in err
 
 
 def test_main_fallback_path_missing(monkeypatch, capsys, tmp_path):
