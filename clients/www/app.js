@@ -134,7 +134,6 @@ const pollLog = document.querySelector("#poll-log");
 let searchEs = null;
 let searchPolls = new Map(); // job_id → handle setInterval du repli REST
 let screenshotsEnabled = false;
-let currentSearchTerm = ""; // terme en cours : sert au surlignage des paragraphes
 const capturePolls = new Map(); // capture_job_id → handle renvoyé par openJobStream
 const screenshotPolls = new Map(); // screenshot_job_id → { imgEl, attempts }
 let screenshotTick = null; // intervalle global : 1 GET / 2s (sous le rate-limit 30/min)
@@ -344,7 +343,6 @@ form.addEventListener("submit", async (event) => {
 
   const payload = Object.fromEntries(new FormData(form));
   payload.term = payload.term.trim();
-  currentSearchTerm = payload.term;
   payload.max_results = Number(payload.max_results);
   payload.max_depth = Number(payload.max_depth);
   payload.max_pages = Number(payload.max_pages);
@@ -417,7 +415,7 @@ async function streamSearchJob(id) {
         setEndpointState("job", "done");
         setStatus("Job termine. Resultats charges.", "completed");
         setMeterState("completed");
-        renderResults(job.result);
+        renderResults(job.result, job.request?.term);
         return;
       }
 
@@ -474,7 +472,7 @@ function pollSearchJob(id) {
         setEndpointState("job", "done");
         setStatus("Job termine. Resultats charges.", "completed");
         setMeterState("completed");
-        renderResults(job.result);
+        renderResults(job.result, job.request?.term);
         return;
       }
       if (job.status === "failed" || job.status === "cancelled") {
@@ -733,7 +731,10 @@ function formatDate(value) {
   }).format(date);
 }
 
-function renderResults(result) {
+/* term = terme du job rendu (job.request.term), scopé à ce rendu : pas d'état
+   global, donc un ancien job qui se termine surligne avec SON terme, même si
+   une nouvelle recherche a démarré entre-temps. */
+function renderResults(result, term = "") {
   // Capture job
   if (result?.download_url) {
     const url = `${API_BASE_URL}${result.download_url}`;
@@ -759,7 +760,7 @@ function renderResults(result) {
   summary.textContent = `${total} resultat(s), ${pages} page(s) lue(s), duree ${duration}.`;
 
   const thumbMap = new Map(); // url → <img> element
-  results.replaceChildren(...items.map(item => renderResult(item, thumbMap)));
+  results.replaceChildren(...items.map(item => renderResult(item, thumbMap, term)));
 
   if (items.length === 0) {
     summary.textContent = "Job termine, aucun resultat trouve.";
@@ -819,7 +820,7 @@ function renderHighlightedParagraphs(item, term) {
   return wrap;
 }
 
-function renderResult(item, thumbMap) {
+function renderResult(item, thumbMap, term) {
   const row = document.createElement("li");
   const article = document.createElement("article");
   const title = document.createElement("h3");
@@ -845,7 +846,7 @@ function renderResult(item, thumbMap) {
   snippet.textContent = item.snippet || "Aucun extrait disponible.";
   footer.textContent = `Occurrences: ${item.term_count ?? "-"} - profondeur: ${item.depth ?? "-"}`;
 
-  const paragraphsBlock = renderHighlightedParagraphs(item, currentSearchTerm);
+  const paragraphsBlock = renderHighlightedParagraphs(item, term);
 
   captureBtn.type = "button";
   captureBtn.className = "btn-capture";
@@ -1126,7 +1127,6 @@ function torHref(url) {
   }
 
   if (jobId) {
-    currentSearchTerm = term || "";
     window.addEventListener("load", () => {
       (async () => {
         try {
@@ -1139,10 +1139,9 @@ function torHref(url) {
           document.getElementById("job-status").textContent = statusLabel(job.status);
           document.getElementById("job-started").textContent = formatDate(job.started_at);
           document.getElementById("job-completed").textContent = formatDate(job.completed_at);
-          if (job.request?.term) currentSearchTerm = job.request.term;
           if (job.status === "completed" && job.result) {
             setStatus(statusLabel(job.status), "done");
-            renderResults(job.result);
+            renderResults(job.result, job.request?.term);
           } else {
             setStatus(statusLabel(job.status), job.status === "failed" ? "failed" : "running");
           }
