@@ -10,7 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as futu
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote as url_quote
 from datetime import datetime, timezone
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
+from bisect import bisect_right
 
 from config import settings
 from core.constants import BLACKLIST_PATHS, ONION_URL_REGEX
@@ -238,37 +239,152 @@ def extract_matching_paragraphs(soup: BeautifulSoup, term: str, max_paragraphs: 
 
     Returns plain text only — the site's HTML is never passed through, so the
     client can safely wrap matches in <mark> without XSS risk.
+
+    Linear-time design (the naive version re-ran get_text() per block AND per
+    ancestor-descendant check, i.e. O(n²) on deep pages):
+      1. one normalized text buffer for the whole document, built in a single
+         pass over the plain NavigableStrings (comments, script/style/CDATA
+         and doctype are excluded, mirroring get_text());
+      2. a [start, end) span per element into that buffer, merged bottom-up —
+         an element's text IS buffer[span], no per-element copies;
+      3. term occurrences located once in the buffer, then marked on every
+         element whose span fully contains one (with early exit when an
+         ancestor is already marked) — equivalent to the old per-element
+         ``term in block_text(el)`` scan;
+      4. "has a matching block descendant" recomputed bottom-up from the
+         children instead of walking each element's subtree.
     """
     term_lower = term.lower()
-
-    def block_text(el) -> str:
-        return re.sub(r'\s+', ' ', el.get_text(separator=' ', strip=True)).strip()
+    elements = soup.find_all(True)
+    if not elements:
+        return []
 
     def is_block(el) -> bool:
         return el.name not in _INLINE_TAGS and el.name not in ('script', 'style', 'meta', 'link')
 
-    def has_matching_block_descendant(el) -> bool:
-        return any(
-            is_block(d) and term_lower in block_text(d).lower()
-            for d in el.find_all(True)
-        )
+    # Tag equality in bs4 is STRUCTURAL (two identical subtrees compare equal
+    # and share the same hash), so Tags are unusable as dict/set keys — every
+    # lookup would fall back to an O(subtree) __eq__. All per-element state is
+    # therefore keyed by id(el); els never outlive the soup within this call.
+    # ── 1. Global buffer: cleaned text of every plain string, in document
+    #      order, joined by single spaces — exactly what get_text()+re.sub
+    #      produced per element, but computed once for the whole document.
+    parts: List[str] = []
+    string_start: List[int] = []   # buffer offset where each segment begins
+    string_len: List[int] = []
+    string_parent: List[int] = []  # id() of the owning Tag of each segment
+    pos = 0
+    for s in soup.descendants:
+        if type(s) is not NavigableString:
+            continue  # Comment/CData/Doctype/Script/Stylesheet are not "text"
+        parent = s.parent
+        if not isinstance(parent, Tag):
+            continue  # soup-level stray text belongs to no element
+        cleaned = re.sub(r'\s+', ' ', str(s)).strip()
+        if not cleaned:
+            continue  # get_text(strip=True) drops it; separators collapse anyway
+        if parts:
+            parts.append(' ')
+            pos += 1
+        string_start.append(pos)
+        string_len.append(len(cleaned))
+        string_parent.append(id(parent))
+        parts.append(cleaned)
+        pos += len(cleaned)
+    buffer = ''.join(parts)
+    del parts
 
+    # ── 2. Per-element spans, merged bottom-up (reverse document order means
+    #      every child span is final by the time its parent is visited).
+    span_start: Dict[int, int] = {}
+    span_end: Dict[int, int] = {}
+    own: Dict[int, List[int]] = {}  # id(el) -> indices of its direct strings
+    for i, p_id in enumerate(string_parent):
+        own.setdefault(p_id, []).append(i)
+
+    for el in reversed(elements):
+        el_id = id(el)
+        s_min = None
+        e_max = None
+        for i in own.get(el_id, ()):
+            if s_min is None or string_start[i] < s_min:
+                s_min = string_start[i]
+            e = string_start[i] + string_len[i]
+            if e_max is None or e > e_max:
+                e_max = e
+        for child in el.children:
+            if isinstance(child, Tag):
+                cs = span_start.get(id(child))
+                if cs is None:
+                    continue
+                if s_min is None or cs < s_min:
+                    s_min = cs
+                ce = span_end[id(child)]
+                if e_max is None or ce > e_max:
+                    e_max = ce
+        if s_min is not None:
+            span_start[el_id] = s_min
+            span_end[el_id] = e_max
+
+    # ── 3. Mark every element whose span fully contains a term occurrence
+    #      (equivalent to the old ``term_lower in block_text(el).lower()``).
+    #      Occurrences are found once; marking walks up from the deepest
+    #      covering element and stops at the first already-marked ancestor,
+    #      so total work stays linear in practice.
+    match_set: Set[int] = set()
+    if term_lower == '':
+        # Degenerate empty term: the old code matched every non-empty block.
+        match_set.update(id(el) for el in elements)
+    elif buffer:
+        buffer_lower = buffer.lower()
+        tag_by_id: Dict[int, Tag] = {id(el): el for el in elements}
+        occ = buffer_lower.find(term_lower)
+        while occ != -1:
+            occ_end = occ + len(term_lower)
+            # Deepest element whose span contains [occ, occ_end): start from
+            # the segment holding `occ` and climb while the span is too short.
+            seg = bisect_right(string_start, occ) - 1
+            el: Optional[Tag] = tag_by_id.get(string_parent[seg]) if seg >= 0 else None
+            while el is not None and span_end.get(id(el), -1) < occ_end:
+                el = el.parent
+            while el is not None:
+                el_id = id(el)
+                if el_id in match_set:
+                    break  # already marked: so are its ancestors, stop early
+                if el_id in span_end:
+                    match_set.add(el_id)
+                el = el.parent
+            occ = buffer_lower.find(term_lower, occ + 1)
+
+    # ── 4. "A matching block descendant exists": bottom-up from the children
+    #      instead of re-walking each matching element's subtree.
+    has_matching_block_child: Set[int] = set()
+    for el in reversed(elements):
+        el_id = id(el)
+        for child in el.children:
+            if isinstance(child, Tag):
+                c_id = id(child)
+                if (c_id in match_set and is_block(child)) or c_id in has_matching_block_child:
+                    has_matching_block_child.add(el_id)
+                    break
+
+    # ── 5. Same selection as before: document order, innermost block wins,
+    #      dedup, cap.
     matches: List[str] = []
     seen: Set[str] = set()
-
-    for el in soup.find_all(True):
+    for el in elements:
+        el_id = id(el)
+        if el_id not in match_set or el_id in has_matching_block_child:
+            continue
         if not is_block(el):
             continue
-        text = block_text(el)
-        if not text or term_lower not in text.lower():
+        text = buffer[span_start[el_id]:span_end[el_id]]
+        if not text or text in seen:
             continue
-        if has_matching_block_descendant(el):
-            continue  # a deeper block covers this match — defer to it
-        if text not in seen:
-            seen.add(text)
-            matches.append(text[:1000])
-            if len(matches) >= max_paragraphs:
-                break
+        seen.add(text)
+        matches.append(text[:1000])
+        if len(matches) >= max_paragraphs:
+            break
 
     return matches
 
