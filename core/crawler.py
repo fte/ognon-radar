@@ -227,6 +227,62 @@ def extract_text_content(soup: BeautifulSoup) -> str:
     return re.sub(r'\s+', ' ', soup.get_text(separator=' ', strip=True))
 
 
+def extract_matching_paragraphs(soup: BeautifulSoup, term: str, max_paragraphs: int = 5) -> List[str]:
+    """Extract unique block-level text fragments containing the search term.
+
+    Walks block-level containers (p, li, td, blockquote, div…) and keeps the
+    text of those that contain the term (case-insensitive). A container whose
+    *descendant blocks* also match is skipped — the innermost block wins, so
+    <body>/<div> wrappers never shadow the actual paragraphs they contain.
+    Exact duplicate texts are deduplicated ("unique paragraphs").
+
+    Returns plain text only — the site's HTML is never passed through, so the
+    client can safely wrap matches in <mark> without XSS risk.
+    """
+    term_lower = term.lower()
+
+    def block_text(el) -> str:
+        return re.sub(r'\s+', ' ', el.get_text(separator=' ', strip=True)).strip()
+
+    def is_block(el) -> bool:
+        return el.name not in _INLINE_TAGS and el.name not in ('script', 'style', 'meta', 'link')
+
+    def has_matching_block_descendant(el) -> bool:
+        return any(
+            is_block(d) and term_lower in block_text(d).lower()
+            for d in el.find_all(True)
+        )
+
+    matches: List[str] = []
+    seen: Set[str] = set()
+
+    for el in soup.find_all(True):
+        if not is_block(el):
+            continue
+        text = block_text(el)
+        if not text or term_lower not in text.lower():
+            continue
+        if has_matching_block_descendant(el):
+            continue  # a deeper block covers this match — defer to it
+        if text not in seen:
+            seen.add(text)
+            matches.append(text[:1000])
+            if len(matches) >= max_paragraphs:
+                break
+
+    return matches
+
+
+# Inline elements are never treated as "paragraphs"; their text is covered by
+# the nearest block-level ancestor, so skipping them avoids duplicates.
+_INLINE_TAGS = frozenset({
+    'a', 'abbr', 'b', 'bdi', 'bdo', 'big', 'br', 'button', 'cite', 'code',
+    'data', 'dfn', 'em', 'font', 'i', 'img', 'input', 'kbd', 'label', 'map',
+    'mark', 'output', 'q', 'samp', 'select', 'small', 'span', 'strong',
+    'sub', 'sup', 'textarea', 'time', 'tt', 'u', 'var', 'wbr',
+})
+
+
 def search_term_in_text(text: str, term: str) -> Tuple[int, str]:
     """Return (occurrence_count, snippet). Count=0 means not found."""
     text_lower = text.lower()
@@ -441,6 +497,10 @@ class OnionCrawler:
         """
         crawled_urls: Set[str] = set()
         results: List[dict] = []
+        # url -> (term_count, paragraphs) for pages already matched during the
+        # BFS — lets the SERP-enrichment pass reuse them without a second
+        # Tor fetch when a SERP entry points at an already-crawled page.
+        match_cache: Dict[str, Tuple[int, List[str]]] = {}
 
         queue: deque = deque([(start_url, 0)])
 
@@ -499,6 +559,7 @@ class OnionCrawler:
                             'seed': start_url,
                             'depth': depth + 1,
                             'term_count': 1,
+                            'paragraphs': None,  # SERP entries: page not crawled
                         })
                         if len(results) >= max_results:
                             break
@@ -507,6 +568,8 @@ class OnionCrawler:
                     # Normal page: search for term in text
                     count, snippet = search_term_in_text(text, search_term)
                     if count:
+                        paragraphs = extract_matching_paragraphs(soup, search_term)
+                        match_cache[current_url] = (count, paragraphs)
                         results.append({
                             'url': current_url,
                             'title': title,
@@ -515,8 +578,9 @@ class OnionCrawler:
                             'seed': start_url,
                             'depth': depth,
                             'term_count': count,
+                            'paragraphs': paragraphs,
                         })
-                        logger.info(f"Found '{search_term}' in {current_url} ({count} times)")
+                        logger.info(f"Found '{search_term}' in {current_url} ({count} times, {len(paragraphs)} paragraphs)")
 
                 if depth < max_depth:
                     links = extract_onion_links(current_url, soup)
@@ -528,5 +592,26 @@ class OnionCrawler:
                 if progress_cb:
                     progress_cb(len(crawled_urls), len(results))
                 time.sleep(settings.crawl_delay)
+
+        # Enrich SERP-derived results (paragraphs=None): the SERP page only
+        # proves the entry exists — the paragraph text lives on the target
+        # page. Fetch each target once through Tor, extract the unique
+        # matching paragraphs, and correct term_count while at it.
+        for result in results:
+            if result.get('paragraphs') is not None:
+                continue
+            cached = match_cache.get(result['url'])
+            if cached is not None:
+                result['term_count'], result['paragraphs'] = cached
+                continue
+            scraped = self.scrape_page(result['url'], timeout)
+            if not scraped:
+                continue
+            _, text, soup = scraped
+            count, _ = search_term_in_text(text, search_term)
+            if count:
+                result['paragraphs'] = extract_matching_paragraphs(soup, search_term)
+                result['term_count'] = count
+            time.sleep(settings.crawl_delay)
 
         return results, len(crawled_urls)

@@ -185,6 +185,97 @@ class TestOnionCrawler:
 
         assert len(results) <= 2
 
+    def test_crawl_returns_unique_paragraphs(self, _patch_config):
+        """Results carry plain-text paragraphs containing the term."""
+        crawler, tor = self._make_crawler()
+        html = (
+            "<html><head><title>Test</title></head><body>"
+            "<p>The secret keyword is here.</p>"
+            "<p>Another paragraph with SECRET KEYWORD inside.</p>"
+            "<p>Nothing relevant in this one.</p>"
+            "</body></html>"
+        )
+        tor.get_with_retries.return_value = self._make_response(html)
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=3,
+            timeout=10,
+        )
+
+        assert len(results) == 1
+        paragraphs = results[0]["paragraphs"]
+        assert len(paragraphs) == 2
+        assert all("secret keyword" in p.lower() for p in paragraphs)
+        # Plain text only — no HTML from the crawled site may leak through.
+        assert all("<" not in p and ">" not in p for p in paragraphs)
+
+    def test_extract_matching_paragraphs_dedupes_and_caps(self, _patch_config):
+        """Nested/duplicated blocks appear once; cap of 5 unique fragments."""
+        from core.crawler import extract_matching_paragraphs
+
+        soup = BeautifulSoup(
+            "<html><body>"
+            "<div><p>needle in a paragraph</p></div>"  # nested: div contains p
+            "<p>needle in a paragraph</p>"              # exact duplicate text
+            + "".join(f"<p>unique hit number {i} needle</p>" for i in range(10))
+            + "</body></html>",
+            "lxml",
+        )
+
+        paragraphs = extract_matching_paragraphs(soup, "needle")
+
+        # Deduplication: "needle in a paragraph" appears once (outermost wins).
+        assert sum(1 for p in paragraphs if p == "needle in a paragraph") == 1
+        # Hard cap of 5 unique fragments.
+        assert len(paragraphs) == 5
+        # Case-insensitive matching.
+        soup2 = BeautifulSoup("<p>UPPERCASE Needle Here</p>", "lxml")
+        assert extract_matching_paragraphs(soup2, "needle") == ["UPPERCASE Needle Here"]
+
+    def test_serp_results_get_paragraphs_from_target(self, _patch_config):
+        """SERP-derived entries are enriched with paragraphs from the target page."""
+        crawler, tor = self._make_crawler()
+        # Ahmia SERP stub: redirect link wrapped as Ahmia does.
+        target = "http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.onion/page"
+        html = (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + target + '">Result</a></h4>'
+            "<p>a snippet mentioning secret keyword</p></li>"
+            "</body></html>"
+        )
+        # First call = the SERP page; the crawler then fetches the target
+        # page to enrich the SERP result with paragraphs from it.
+        tor.get_with_retries.side_effect = [
+            self._make_response(html),
+            self._make_response(
+                "<html><head><title>Target</title></head><body>"
+                "<p>the secret keyword lives on this target page</p>"
+                "</body></html>"
+            ),
+        ]
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=3,
+            timeout=10,
+        )
+
+        # The BFS also follows the SERP entry as a normal link and matches the
+        # term on the target page; both result rows describe the same URL.
+        assert len(results) == 2
+        for row in results:
+            assert row["paragraphs"] == ["the secret keyword lives on this target page"]
+            assert row["term_count"] == 1
+        # SERP entry + target page + no duplicate fetch for the enrichment = 2 calls.
+        assert tor.get_with_retries.call_count == 2
+
 
 # ── TorClient.check_reachable ─────────────────────────────────────────
 
