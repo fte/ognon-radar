@@ -497,10 +497,20 @@ class OnionCrawler:
         """
         crawled_urls: Set[str] = set()
         results: List[dict] = []
+        # URLs already present in `results` — one row per URL, ever. A SERP can
+        # list the same target repeatedly (and the BFS then follows it too);
+        # without this set the same page surfaces as duplicate rows.
+        surfaced_urls: Set[str] = set()
         # url -> (term_count, paragraphs) for pages already matched during the
         # BFS — lets the SERP-enrichment pass reuse them without a second
-        # Tor fetch when a SERP entry points at an already-crawled page.
+        # Tor fetch when a SERP entry points at an already-crawled page. The
+        # enrichment pass writes back into it, so repeated targets are only
+        # ever fetched once for paragraphs.
         match_cache: Dict[str, Tuple[int, List[str]]] = {}
+        # URLs crawled during the BFS that do NOT contain the term. The
+        # enrichment pass must not re-fetch them through Tor: the outcome is
+        # already known (no match → no paragraphs).
+        no_match_urls: Set[str] = set()
 
         queue: deque = deque([(start_url, 0)])
 
@@ -530,6 +540,20 @@ class OnionCrawler:
                     needed = max_results - len(results)
                     if needed <= 0:
                         break
+                    # Dedupe BEFORE probing: the same target can appear many
+                    # times in one SERP (or already be a result row from an
+                    # earlier page). Probing or surfacing it twice would burn
+                    # Tor fetches and create duplicate rows.
+                    unique_entries: List[Dict[str, str]] = []
+                    seen_here: Set[str] = set()
+                    for entry in entries:
+                        url = entry['url']
+                        if url in surfaced_urls or url in seen_here:
+                            continue
+                        seen_here.add(url)
+                        unique_entries.append(entry)
+                    entries = unique_entries
+
                     verdicts, unprobed_idx = self._probe_serp_reachability(entries, needed)
                     probed = len(verdicts)
                     skipped = sum(1 for up in verdicts.values() if not up)
@@ -551,6 +575,7 @@ class OnionCrawler:
                     surfaced += [entries[idx] for idx in unprobed_idx]
 
                     for entry in surfaced:
+                        surfaced_urls.add(entry['url'])
                         results.append({
                             'url': entry['url'],
                             'title': entry['title'],
@@ -567,20 +592,33 @@ class OnionCrawler:
                 else:
                     # Normal page: search for term in text
                     count, snippet = search_term_in_text(text, search_term)
+                    if not count:
+                        no_match_urls.add(current_url)
                     if count:
                         paragraphs = extract_matching_paragraphs(soup, search_term)
                         match_cache[current_url] = (count, paragraphs)
-                        results.append({
-                            'url': current_url,
-                            'title': title,
-                            'snippet': snippet,
-                            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                            'seed': start_url,
-                            'depth': depth,
-                            'term_count': count,
-                            'paragraphs': paragraphs,
-                        })
-                        logger.info(f"Found '{search_term}' in {current_url} ({count} times, {len(paragraphs)} paragraphs)")
+                        if current_url in surfaced_urls:
+                            # Already a result row (e.g. surfaced from a SERP):
+                            # refresh the cache only — the enrichment pass will
+                            # attach these paragraphs to the existing row.
+                            # Never a duplicate row, never a refetch later.
+                            logger.info(
+                                f"Already surfaced {current_url} — "
+                                f"match cache refreshed ({count} times)"
+                            )
+                        else:
+                            surfaced_urls.add(current_url)
+                            results.append({
+                                'url': current_url,
+                                'title': title,
+                                'snippet': snippet,
+                                'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                'seed': start_url,
+                                'depth': depth,
+                                'term_count': count,
+                                'paragraphs': paragraphs,
+                            })
+                            logger.info(f"Found '{search_term}' in {current_url} ({count} times, {len(paragraphs)} paragraphs)")
 
                 if depth < max_depth:
                     links = extract_onion_links(current_url, soup)
@@ -595,11 +633,15 @@ class OnionCrawler:
 
         # Enrich SERP-derived results (paragraphs=None): the SERP page only
         # proves the entry exists — the paragraph text lives on the target
-        # page. Fetch each target once through Tor, extract the unique
-        # matching paragraphs, and correct term_count while at it.
+        # page. Each target is fetched at most once through Tor: cache hits
+        # (BFS match or an earlier enrichment of the same URL) are reused, and
+        # fresh fetches are written back into match_cache so a URL listed
+        # twice never costs a second fetch.
         for result in results:
             if result.get('paragraphs') is not None:
                 continue
+            if result['url'] in no_match_urls:
+                continue  # crawled during BFS: no term match, nothing to add
             cached = match_cache.get(result['url'])
             if cached is not None:
                 result['term_count'], result['paragraphs'] = cached
@@ -610,8 +652,10 @@ class OnionCrawler:
             _, text, soup = scraped
             count, _ = search_term_in_text(text, search_term)
             if count:
-                result['paragraphs'] = extract_matching_paragraphs(soup, search_term)
+                paragraphs = extract_matching_paragraphs(soup, search_term)
+                match_cache[result['url']] = (count, paragraphs)
                 result['term_count'] = count
+                result['paragraphs'] = paragraphs
             time.sleep(settings.crawl_delay)
 
         return results, len(crawled_urls)

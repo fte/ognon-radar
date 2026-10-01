@@ -267,13 +267,51 @@ class TestOnionCrawler:
             timeout=10,
         )
 
-        # The BFS also follows the SERP entry as a normal link and matches the
-        # term on the target page; both result rows describe the same URL.
-        assert len(results) == 2
-        for row in results:
-            assert row["paragraphs"] == ["the secret keyword lives on this target page"]
-            assert row["term_count"] == 1
+        # One row per URL: the SERP entry and the BFS match on the same target
+        # are merged — the BFS match refreshes the paragraph cache instead of
+        # adding a duplicate row.
+        assert len(results) == 1
+        assert results[0]["url"] == target
+        assert results[0]["paragraphs"] == ["the secret keyword lives on this target page"]
+        assert results[0]["term_count"] == 1
         # SERP entry + target page + no duplicate fetch for the enrichment = 2 calls.
+        assert tor.get_with_retries.call_count == 2
+
+    def test_serp_duplicate_targets_are_fetched_once(self, _patch_config):
+        """A target listed twice in the SERP yields ONE row and ONE Tor fetch."""
+        crawler, tor = self._make_crawler()
+        target = "http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccc.onion/page"
+        html = (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + target + '">First</a></h4>'
+            "<p>snippet one with secret keyword</p></li>"
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + target + '">Second</a></h4>'
+            "<p>snippet two with secret keyword</p></li>"
+            "</body></html>"
+        )
+        tor.get_with_retries.side_effect = [
+            self._make_response(html),
+            self._make_response(
+                "<html><head><title>Target</title></head><body>"
+                "<p>the secret keyword lives on this target page</p>"
+                "</body></html>"
+            ),
+        ]
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=5,
+            timeout=10,
+        )
+
+        assert len(results) == 1
+        assert results[0]["url"] == target
+        assert results[0]["paragraphs"] == ["the secret keyword lives on this target page"]
+        # SERP page + single target fetch: the duplicate entry never costs a
+        # second Tor round-trip (neither probing, surfacing, nor enrichment).
         assert tor.get_with_retries.call_count == 2
 
 
