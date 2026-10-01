@@ -705,9 +705,31 @@ class TestRateLimitKey:
         ({"X-API-Key": "sk-abc", "X-Client-ID": "client-1"}, "1.2.3.4", "ak:sk-abc"),
         # Client ID used when no API key
         ({"X-Client-ID": "client-1"}, "1.2.3.4", "cid:client-1"),
-        # Fallback to X-Forwarded-For — uses real slowapi get_remote_address
-        # which returns request.client.host, not the X-Forwarded-For value
-        ({"X-Forwarded-For": "10.0.0.1, 10.0.0.2"}, "1.2.3.4", "1.2.3.4"),
+        # Behind nginx: peer is loopback, real client comes from the headers.
+        # Regression guard: slowapi's own get_remote_address returns the peer
+        # (127.0.0.1), which collapsed every header-less request — SSE included —
+        # into one global bucket.
+        ({"X-Real-IP": "8.8.4.4"}, "127.0.0.1", "8.8.4.4"),
+        # A real client on a private/LAN address must NOT be discarded: it is
+        # still the caller. (Earlier revision skipped RFC1918 entries, which
+        # fell through to the forged leftmost entry.)
+        ({"X-Real-IP": "10.0.0.7"}, "127.0.0.1", "10.0.0.7"),
+        # --- Spoofing guards -------------------------------------------
+        # nginx overwrites X-Real-IP from $remote_addr, so a forged XFF next to
+        # it is irrelevant.
+        ({"X-Real-IP": "203.0.113.9", "X-Forwarded-For": "9.9.9.9"}, "127.0.0.1", "203.0.113.9"),
+        # $proxy_add_x_forwarded_for prepends whatever the client sent, so the
+        # forged value must not decide the bucket. Read the RIGHTMOST entry.
+        ({"X-Forwarded-For": "1.1.1.1, 203.0.113.9"}, "127.0.0.1", "203.0.113.9"),
+        # Rotating the forged prefix must not create new buckets.
+        ({"X-Forwarded-For": "2.2.2.2, 203.0.113.9"}, "127.0.0.1", "203.0.113.9"),
+        # Single-hop (client sent nothing): the one entry is the real client.
+        ({"X-Forwarded-For": "203.0.113.9"}, "127.0.0.1", "203.0.113.9"),
+        # Empty chain → no usable value, fall back to the peer.
+        ({"X-Forwarded-For": " , "}, "127.0.0.1", "127.0.0.1"),
+        # Forwarded headers are ignored when the peer is NOT a trusted proxy:
+        # a direct client cannot forge its IP to dodge the limiter.
+        ({"X-Forwarded-For": "10.0.0.1", "X-Real-IP": "10.0.0.1"}, "1.2.3.4", "1.2.3.4"),
         # Fallback to request.client.host
         ({}, "5.6.7.8", "5.6.7.8"),
         # No client at all → 127.0.0.1
@@ -779,6 +801,102 @@ class TestRateLimiterInstance:
             body = resp2.json()
             # slowapi returns {error: ...} key, not {detail: ...}
             assert "rate limit exceeded" in body.get("error", "").lower()
+
+
+class TestTrustedProxyBoundary:
+    """_is_trusted_proxy() — who is allowed to assert a forwarded client IP.
+
+    Too narrow and every client collapses into one bucket (the production bug:
+    all SSE streams shared 127.0.0.1's 5/minute budget). Too wide and a peer can
+    forge its own bucket and bypass the limiter. Both directions are covered.
+    """
+
+    @pytest.mark.parametrize("host", [
+        "127.0.0.1", "127.0.0.53",
+        "10.0.0.5", "10.255.255.254",
+        # Docker's default bridge pools live here — the range the old
+        # startswith() check omitted entirely.
+        "172.16.0.1", "172.17.0.2", "172.20.0.3", "172.31.255.254",
+        "192.168.1.10", "169.254.1.1",
+        "::1", "fd00::2", "fc00::1", "fe80::1",
+        # Dual-stack uvicorn reports IPv4-mapped loopback.
+        "::ffff:127.0.0.1", "::ffff:172.18.0.5",
+    ])
+    def test_trusted_hosts(self, host):
+        from core.rate_limiter import _is_trusted_proxy
+        assert _is_trusted_proxy(host) is True
+
+    @pytest.mark.parametrize("host", [
+        "8.8.8.8", "1.1.1.1", "203.0.113.9", "198.51.100.7", "2606:4700::1", "::2",
+        "100.64.0.1",  # CGNAT — private-ish but never a legitimate proxy peer
+        "172.15.0.1",   # just below 172.16.0.0/12
+        "172.32.0.1",   # just above 172.31.255.255/12
+        "evil.example.com", "not-an-ip", "10.0.0.5.evil", "0.0.0.0",
+    ])
+    def test_untrusted_hosts(self, host):
+        from core.rate_limiter import _is_trusted_proxy
+        assert _is_trusted_proxy(host) is False
+
+    def test_rfc1918_172_boundaries(self):
+        """172.16.0.0/12 spans 172.16–172.31 only."""
+        from core.rate_limiter import _is_trusted_proxy
+        assert _is_trusted_proxy("172.16.0.0") is True
+        assert _is_trusted_proxy("172.31.255.255") is True
+        assert _is_trusted_proxy("172.15.255.255") is False
+        assert _is_trusted_proxy("172.32.0.0") is False
+
+    def test_config_override_narrows_boundary(self, monkeypatch):
+        """An explicit trusted_proxies list replaces the default entirely."""
+        import core.rate_limiter as rl
+        monkeypatch.setattr(rl.settings, "trusted_proxies", ["127.0.0.1/32"], raising=False)
+        monkeypatch.setattr(rl, "_trusted_networks", None)
+        try:
+            assert rl._is_trusted_proxy("127.0.0.1") is True
+            # Everything else that the default would have trusted is now denied.
+            assert rl._is_trusted_proxy("172.18.0.5") is False
+            assert rl._is_trusted_proxy("10.1.2.3") is False
+        finally:
+            monkeypatch.setattr(rl, "_trusted_networks", None)
+
+    def test_config_override_garbage_falls_back_to_defaults(self, monkeypatch):
+        """A typo must not silently disable forwarded-header handling."""
+        import core.rate_limiter as rl
+        monkeypatch.setattr(
+            rl.settings, "trusted_proxies", ["nonsense", "999.999.0.0/8"], raising=False
+        )
+        monkeypatch.setattr(rl, "_trusted_networks", None)
+        try:
+            assert rl._is_trusted_proxy("172.20.0.3") is True   # default still applies
+            assert rl._is_trusted_proxy("8.8.8.8") is False
+        finally:
+            monkeypatch.setattr(rl, "_trusted_networks", None)
+
+    def test_docker_compose_nginx_peer_gets_separate_buckets(self):
+        """Regression guard for the Compose topology: nginx as a sibling
+        container means the peer is 172.18.x.x, not loopback. If that range is
+        dropped from the trust set, every client shares one bucket again."""
+        from unittest.mock import MagicMock
+        from core.rate_limiter import get_remote_address
+
+        def key_for(client_ip):
+            req = MagicMock(spec=Request)
+            req.headers = {"X-Real-IP": client_ip}
+            req.client = MagicMock()
+            req.client.host = "172.18.0.5"
+            return get_remote_address(req)
+
+        assert key_for("81.2.3.9") != key_for("90.5.6.7")
+
+    def test_ipv4_mapped_loopback_is_trusted(self):
+        """uvicorn reports ::ffff:127.0.0.1 on a dual-stack bind."""
+        from unittest.mock import MagicMock
+        from core.rate_limiter import get_remote_address
+
+        req = MagicMock(spec=Request)
+        req.headers = {"X-Real-IP": "81.2.3.9"}
+        req.client = MagicMock()
+        req.client.host = "::ffff:127.0.0.1"
+        assert get_remote_address(req) == "81.2.3.9"
 
 
 # ── Screenshot proxy resolution ─────────────────────────────────────────

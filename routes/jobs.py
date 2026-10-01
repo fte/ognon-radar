@@ -96,7 +96,11 @@ async def get_job(
 
 
 @router.get("/jobs/{job_id}/stream")
-@limiter.limit("5/minute")
+# 30/minute et non 5/minute : ce budget est par IP réelle (voir
+# core.rate_limiter.get_remote_address) et doit absorber les reconnexions
+# legitimes d'un EventSource sur reseau mobile, pas seulement l'ouverture
+# initiale du flux.
+@limiter.limit("30/minute")
 async def stream_job(
     request: Request,
     job_id: str,
@@ -143,7 +147,9 @@ async def stream_job(
 
 
 @router.post("/jobs/{job_id}/stream-token", status_code=200)
-@limiter.limit("10/minute")
+# Un jeton par tentative de connexion : le client en remint un a chaque
+# reconnexion SSE (voir openJobStream dans clients/www/app.js).
+@limiter.limit("20/minute")
 async def create_stream_token(
     request: Request,
     job_id: str,
