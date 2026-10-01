@@ -705,9 +705,16 @@ class TestRateLimitKey:
         ({"X-API-Key": "sk-abc", "X-Client-ID": "client-1"}, "1.2.3.4", "ak:sk-abc"),
         # Client ID used when no API key
         ({"X-Client-ID": "client-1"}, "1.2.3.4", "cid:client-1"),
-        # Fallback to X-Forwarded-For — uses real slowapi get_remote_address
-        # which returns request.client.host, not the X-Forwarded-For value
-        ({"X-Forwarded-For": "10.0.0.1, 10.0.0.2"}, "1.2.3.4", "1.2.3.4"),
+        # Behind nginx: peer is loopback, real client comes from X-Forwarded-For.
+        # Regression guard: slowapi's own get_remote_address returns the peer
+        # (127.0.0.1), which collapsed every header-less request — SSE included —
+        # into one global bucket.
+        ({"X-Forwarded-For": "10.0.0.1, 10.0.0.2"}, "127.0.0.1", "10.0.0.1"),
+        # X-Real-IP used when nginx sends no XFF chain
+        ({"X-Real-IP": "8.8.4.4"}, "127.0.0.1", "8.8.4.4"),
+        # Forwarded headers are ignored when the peer is NOT a trusted proxy,
+        # so a direct client cannot forge its IP to dodge the limiter.
+        ({"X-Forwarded-For": "10.0.0.1"}, "1.2.3.4", "1.2.3.4"),
         # Fallback to request.client.host
         ({}, "5.6.7.8", "5.6.7.8"),
         # No client at all → 127.0.0.1

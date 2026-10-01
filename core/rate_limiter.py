@@ -26,18 +26,53 @@ logger = logging.getLogger(__name__)
 try:
     from slowapi import Limiter, _rate_limit_exceeded_handler as _slowapi_handler
     from slowapi.errors import RateLimitExceeded
-    from slowapi.util import get_remote_address
     _SLOWAPI_AVAILABLE = True
 except ImportError:
     _SLOWAPI_AVAILABLE = False
     logger.info("slowapi not installed — rate limiting disabled")
 
-    def get_remote_address(request: Request) -> str:
-        """Fallback: extract client IP from request headers (as slowapi does)."""
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "127.0.0.1"
+
+def _is_trusted_proxy(host: str) -> bool:
+    """True when the direct peer is a loopback/private address (our own nginx).
+
+    Only then may we believe X-Forwarded-For / X-Real-IP. Trusting those
+    headers unconditionally would let any client forge its IP and escape its
+    rate-limit bucket.
+    """
+    return host.startswith("127.") or host in ("::1", "localhost") or host.startswith("10.") \
+        or host.startswith("192.168.") or host.startswith("169.254.")
+
+
+def get_remote_address(request: Request) -> str:
+    """Resolve the *real* client IP for rate-limit bucketing.
+
+    This is a deliberate override of ``slowapi.util.get_remote_address``, which
+    returns ``request.client.host``. Behind the nginx reverse proxy that value
+    is always ``127.0.0.1``: uvicorn is started without ``--proxy-headers``
+    (see ``ExecStart`` in ``scripts/deploy_live.sh``), so it never rewrites
+    ``request.client``.
+
+    Consequence: every header-less request landed in a single shared bucket.
+    EventSource cannot send ``X-Client-ID``, so *all* SSE streams on the whole
+    internet shared the ``5/minute`` budget of ``GET /jobs/{id}/stream``. A few
+    mobile reconnects exhausted it, the API answered 429, and per the HTML
+    spec the browser then fails the EventSource permanently — which surfaced as
+    "error / reconnect..." lines in the web client and a job that froze forever.
+
+    Reading the real IP from X-Forwarded-For gives each client its own bucket.
+    """
+    peer = request.client.host if request.client else None
+    if not peer or not _is_trusted_proxy(peer):
+        return peer or "127.0.0.1"
+
+    # X-Forwarded-For is a chain appended left-to-right by each hop; the
+    # leftmost entry is the original client. X-Real-IP is nginx's own single
+    # value and is used as a fallback when no chain is present.
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip() or peer
+    real_ip = request.headers.get("X-Real-IP", "")
+    return real_ip.strip() or peer
 
 
 def _rate_limit_key(request: Request) -> str:

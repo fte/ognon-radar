@@ -132,10 +132,112 @@ const results = document.querySelector("#results");
 const pollLog = document.querySelector("#poll-log");
 
 let searchEs = null;
+let searchPolls = new Map(); // job_id → handle setInterval du repli REST
 let screenshotsEnabled = false;
-const capturePolls = new Map(); // capture_job_id → timeout handle
+const capturePolls = new Map(); // capture_job_id → handle renvoyé par openJobStream
 const screenshotPolls = new Map(); // screenshot_job_id → { imgEl, attempts }
 let screenshotTick = null; // intervalle global : 1 GET / 2s (sous le rate-limit 30/min)
+
+/* ───── SSE : reconnexion + diagnostics ─────
+   EventSource se reconnecte seul, mais uniquement tant que le serveur renvoie
+   un flux valide. Sur un reseau mobile la connexion tombe souvent (ecran
+   eteint, passage 4G→5G) ; si le serveur repond 401/429 ou un contenu non-SSE,
+   le navigateur abandonne definitivement (readyState = CLOSED) et le job
+   restait fige. On rejoue donc nous-memes, avec un jeton neuf a chaque
+   tentative et un backoff borne. */
+
+const SSE_MAX_RETRIES = 6; // ~1 min d'essais au total avant de basculer
+
+function backoffDelay(attempt) {
+  return Math.min(1000 * 2 ** attempt, 10000); // 2s, 4s, 8s, 10s, 10s...
+}
+
+/**
+ * Ouvre un flux SSE sur un job et le maintient ouvert.
+ * onMessage(job) recoit chaque evenement deja deserialise.
+ * onGiveUp() est appele quand le budget de tentatives est epuise.
+ */
+function openJobStream(jobId, interval, onMessage, onGiveUp) {
+  const path = `/api/v1/jobs/${encodeURIComponent(jobId)}/stream`;
+  const tokenPath = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}/stream-token`;
+  let es = null;
+  let attempt = 0;
+  let stopped = false;
+
+  async function connect() {
+    if (stopped) return;
+    if (attempt >= SSE_MAX_RETRIES) {
+      addPollLog("SSE", path, "error", `abandon apres ${attempt} tentatives`);
+      onGiveUp();
+      return;
+    }
+
+    // Jeton neuf a chaque tentative : EventSource ne peut pas envoyer
+    // d'en-tetes, et un jeton perime fait echouer la reconnexion.
+    let token;
+    try {
+      const resp = await fetch(tokenPath, { method: "POST", headers: getClientHeaders() });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      token = (await readJson(resp)).token;
+      if (!token) throw new Error("jeton vide");
+    } catch (error) {
+      attempt += 1;
+      const delay = backoffDelay(attempt);
+      addPollLog("SSE", path, "error", `jeton KO (${error.message}) - retry ${attempt}/${SSE_MAX_RETRIES} dans ${delay / 1000}s`);
+      setTimeout(connect, delay);
+      return;
+    }
+
+    es = new EventSource(
+      `${API_BASE_URL}${path}?interval=${interval}&token=${encodeURIComponent(token)}`
+    );
+
+    es.onopen = () => {
+      attempt = 0; // flux retabli : on repart d'une base propre
+    };
+
+    es.onmessage = (event) => {
+      try {
+        onMessage(JSON.parse(event.data));
+      } catch { /* payload illisible, ignore */ }
+    };
+
+    es.onerror = () => {
+      // readyState CLOSED (2) = echec definitif selon la spec HTML (le serveur
+      // a renvoye 401/429 ou un contenu non text/event-stream). CONNECTING (0)
+      // = le navigateur retente de lui-meme. Dans les deux cas on reprend la
+      // main : fermer, noter pourquoi, reessayer avec un jeton neuf.
+      const closed = es.readyState === EventSource.CLOSED;
+      const online = navigator.onLine;
+      attempt += 1;
+      const delay = backoffDelay(attempt);
+
+      addPollLog(
+        "SSE",
+        path,
+        "error",
+        `${closed ? "flux ferme" : "coupe"} - ${online ? "en ligne" : "hors ligne"} - retry ${attempt}/${SSE_MAX_RETRIES} dans ${delay / 1000}s`
+      );
+
+      es.close();
+      setTimeout(connect, delay);
+    };
+  }
+
+  connect();
+
+  return {
+    close() {
+      stopped = true;
+      if (es) es.close();
+    },
+  };
+}
+
+/* Transition de connectivite : cause frequente des coupures SSE sur mobile.
+   On le trace pour le diagnostic, sans perturber le job en cours. */
+window.addEventListener("offline", () => addPollLog("NET", window.location.host, "failed", "hors ligne"));
+window.addEventListener("online", () => addPollLog("NET", window.location.host, "completed", "reconnecte"));
 
 /* ───── Enregistrement des appels XHR ─────
    Intercepte window.fetch pour exposer chaque appel réseau réel
@@ -234,6 +336,10 @@ healthStatus.addEventListener("click", () => {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (searchEs) { searchEs.close(); searchEs = null; }
+  // Un repli REST encore actif sur une recherche precedente doit cesser,
+  // sinon il continue de maj l'UI pendant la nouvelle recherche.
+  for (const handle of searchPolls.values()) window.clearInterval(handle);
+  searchPolls.clear();
 
   const payload = Object.fromEntries(new FormData(form));
   payload.term = payload.term.trim();
@@ -297,20 +403,7 @@ async function checkHealth() {
 
 async function streamSearchJob(id) {
   try {
-    const tokenResp = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}/stream-token`, {
-      method: "POST",
-      headers: getClientHeaders(),
-    });
-    const tokenData = await readJson(tokenResp);
-    if (!tokenResp.ok) throw new Error(formatApiError(tokenData, tokenResp.status));
-
-    const url = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}/stream?interval=2&token=${encodeURIComponent(tokenData.token)}`;
-    searchEs = new EventSource(url);
-
-    searchEs.onmessage = ({ data }) => {
-      let job;
-      try { job = JSON.parse(data); } catch { return; }
-
+    searchEs = openJobStream(id, 2, (job) => {
       updateJob(job);
       const p = job.progress;
       const progressLabel = p ? ` · ${p.pages}p ${p.results}r` : "";
@@ -340,14 +433,68 @@ async function streamSearchJob(id) {
         : statusLabel(job.status);
       setStatus(statusText, "running");
       setMeterState(job.status);
-    };
-
-    searchEs.onerror = () => {
-      addPollLog("SSE", `/api/v1/jobs/${shortId(id)}/stream`, "error", "reconnect...");
-    };
+    }, () => {
+      // Budget SSE epuise : on bascule sur le polling REST, qui lui est
+      // authentifie par en-tete et ne depend pas d'un flux persistant.
+      searchEs.close(); searchEs = null;
+      setEndpointState("job", "active");
+      setStatus("Flux interrompu - passage en polling REST.", "running");
+      pollSearchJob(id);
+    });
   } catch (error) {
     failScenario(error);
   }
+}
+
+/* Repli KISS : quand le SSE ne tient plus, on interroge GET /jobs/{id}
+   toutes les 3s jusqu'a l'etat final. Meme contrat de donnees que le flux. */
+function pollSearchJob(id) {
+  const stop = () => {
+    const handle = searchPolls.get(id);
+    if (handle !== undefined) {
+      window.clearInterval(handle);
+      searchPolls.delete(id);
+    }
+  };
+
+  const tick = async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(id)}`, {
+        headers: getClientHeaders(),
+      });
+      const job = await readJson(r);
+      if (!job.status) return;
+      addPollLog("GET", `/api/v1/jobs/${shortId(id)}`, job.status, "polling");
+
+      if (job.status === "completed") {
+        stop();
+        setBusy(false);
+        setEndpointState("job", "done");
+        setStatus("Job termine. Resultats charges.", "completed");
+        setMeterState("completed");
+        renderResults(job.result);
+        return;
+      }
+      if (job.status === "failed" || job.status === "cancelled") {
+        stop();
+        setBusy(false);
+        setEndpointState("job", "failed");
+        setStatus(job.error || `Job ${job.status}.`, job.status);
+        setMeterState("failed");
+        return;
+      }
+      const p = job.progress;
+      setStatus(
+        p ? `${statusLabel(job.status)} — ${p.pages} page(s), ${p.results} resultat(s)` : statusLabel(job.status),
+        "running"
+      );
+    } catch {
+      /* reseau indisponible : on retentera au tour suivant */
+    }
+  };
+
+  stop(); // ne pas empiler les ticks si le repli est relancé
+  searchPolls.set(id, window.setInterval(tick, 3000));
 }
 
 async function readJson(response) {
@@ -490,12 +637,14 @@ async function generateClientKey() {
 
 function resetScenario() {
   if (searchEs) { searchEs.close(); searchEs = null; }
+  for (const handle of searchPolls.values()) window.clearInterval(handle);
+  searchPolls.clear();
   for (const endpoint of endpoints) {
     if (endpoint.key !== "health") {
       setEndpointState(endpoint.key, "idle");
     }
   }
-  capturePolls.forEach((es) => { if (es && typeof es.close === "function") es.close(); });
+  capturePolls.forEach((handle) => { if (handle && typeof handle.close === "function") handle.close(); });
   capturePolls.clear();
   stopScreenshotTick();
   screenshotPolls.clear();
@@ -817,83 +966,64 @@ async function startCapture(url, btn, statusEl) {
   }
 }
 
-async function streamCapture(captureJobId, btn, statusEl) {
-  // Mint a short-lived token via header-authenticated POST — never put api_key in URL
-  let token;
-  try {
-    const resp = await fetch(
-      `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(captureJobId)}/stream-token`,
-      { method: "POST", headers: getClientHeaders() }
-    );
-    const data = await readJson(resp);
-    if (!resp.ok) throw new Error(formatApiError(data, resp.status));
-    token = data.token;
-  } catch (error) {
-    setEndpointState("capture-poll", "failed");
-    statusEl.value = error.message;
-    statusEl.dataset.state = "failed";
-    btn.disabled = false;
-    return;
-  }
+function streamCapture(captureJobId, btn, statusEl) {
+  const close = () => {
+    const handle = capturePolls.get(captureJobId);
+    if (handle) handle.close();
+    capturePolls.delete(captureJobId);
+  };
 
-  const url = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(captureJobId)}/stream?interval=1&token=${encodeURIComponent(token)}`;
-  const es = new EventSource(url);
-  capturePolls.set(captureJobId, es);
+  // Comme pour la recherche : jeton neuf a chaque tentative et backoff borne.
+  // Une coupure reseau mobile ne doit pas condamner la capture.
+  capturePolls.set(
+    captureJobId,
+    openJobStream(captureJobId, 1, (job) => {
+      const progress = job.progress;
+      const progressLabel = progress
+        ? `${progress.pages} p. — ${(progress.size_bytes / 1024).toFixed(0)} Ko`
+        : "";
+      addPollLog("SSE", `/api/v1/jobs/${shortId(captureJobId)}/stream`, job.status, `capture${progressLabel ? " · " + progressLabel : ""}`);
 
-  es.onmessage = ({ data }) => {
-    let job;
-    try { job = JSON.parse(data); } catch { return; }
-
-    const progress = job.progress;
-    const progressLabel = progress
-      ? `${progress.pages} p. — ${(progress.size_bytes / 1024).toFixed(0)} Ko`
-      : "";
-    addPollLog("SSE", `/api/v1/jobs/${shortId(captureJobId)}/stream`, job.status, `capture${progressLabel ? " · " + progressLabel : ""}`);
-
-    if (job.status === "completed") {
-      es.close();
-      capturePolls.delete(captureJobId);
-      setEndpointState("capture-poll", "done");
-      setEndpointState("capture-download", "done");
-      const result = job.result || {};
-      const pages = result.pages_captured ?? "-";
-      const size = result.size_bytes ? `${(result.size_bytes / 1024).toFixed(0)} Ko` : "-";
-      statusEl.value = `${pages} page(s), ${size}`;
-      statusEl.dataset.state = "completed";
-      if (result.download_url) {
-        const a = document.createElement("a");
-        a.href = `${API_BASE_URL}${result.download_url}`;
-        a.textContent = "Telecharger .warc.gz";
-        a.download = "";
-        a.className = "capture-download-link";
-        statusEl.replaceWith(a);
+      if (job.status === "completed") {
+        close();
+        setEndpointState("capture-poll", "done");
+        setEndpointState("capture-download", "done");
+        const result = job.result || {};
+        const pages = result.pages_captured ?? "-";
+        const size = result.size_bytes ? `${(result.size_bytes / 1024).toFixed(0)} Ko` : "-";
+        statusEl.value = `${pages} page(s), ${size}`;
+        statusEl.dataset.state = "completed";
+        if (result.download_url) {
+          const a = document.createElement("a");
+          a.href = `${API_BASE_URL}${result.download_url}`;
+          a.textContent = "Telecharger .warc.gz";
+          a.download = "";
+          a.className = "capture-download-link";
+          statusEl.replaceWith(a);
+        }
+        return;
       }
-      return;
-    }
 
-    if (job.status === "failed" || job.status === "cancelled") {
-      es.close();
-      capturePolls.delete(captureJobId);
+      if (job.status === "failed" || job.status === "cancelled") {
+        close();
+        setEndpointState("capture-poll", "failed");
+        statusEl.value = job.error || `Capture ${job.status}`;
+        statusEl.dataset.state = "failed";
+        btn.disabled = false;
+        return;
+      }
+
+      statusEl.value = progress
+        ? `${statusLabel(job.status)} — ${progress.pages} page(s), ${(progress.size_bytes / 1024).toFixed(0)} Ko`
+        : statusLabel(job.status);
+    }, () => {
+      close();
       setEndpointState("capture-poll", "failed");
-      statusEl.value = job.error || `Capture ${job.status}`;
+      statusEl.value = "Flux SSE interrompu apres plusieurs tentatives.";
       statusEl.dataset.state = "failed";
       btn.disabled = false;
-      return;
-    }
-
-    statusEl.value = progress
-      ? `${statusLabel(job.status)} — ${progress.pages} page(s), ${(progress.size_bytes / 1024).toFixed(0)} Ko`
-      : statusLabel(job.status);
-  };
-
-  es.onerror = () => {
-    es.close();
-    capturePolls.delete(captureJobId);
-    setEndpointState("capture-poll", "failed");
-    statusEl.value = "Connexion SSE perdue";
-    statusEl.dataset.state = "failed";
-    btn.disabled = false;
-  };
+    })
+  );
 }
 
 function shortId(id) {

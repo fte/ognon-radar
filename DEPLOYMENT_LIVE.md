@@ -199,3 +199,58 @@ Expected on the VPS: ``socks5h://127.0.0.1:9050 -> socks5://127.0.0.1:9050``.
 If it prints ``tor:9050``, the service is not using ``config.live.yaml`` —
 check the ``APP_CONFIG_PATH`` env in the systemd unit.
 
+## 11) Troubleshooting — SSE dies on mobile Chrome ("error / reconnect...")
+
+Symptom: the web client's *Réseau · XHR* panel fills with
+`SSE … error · reconnect…` lines, and the search stays frozen even though the
+job finishes server-side. Desktop is usually fine; mobile Chrome is not.
+
+Two independent causes, both fixed in this repo — but check them if you are on
+an older deploy:
+
+### 11.1 Rate-limit bucket collapsed onto `127.0.0.1`
+
+`uvicorn` is started **without** `--proxy-headers`, so `request.client.host` is
+`127.0.0.1` for every request behind nginx. `EventSource` cannot send custom
+headers, so `X-Client-ID` is absent on SSE and `_rate_limit_key` fell back to
+that peer address: **every SSE stream on the internet shared one
+`5/minute` bucket** on `GET /api/v1/jobs/{id}/stream`.
+
+Once exhausted, slowapi returns `429`. Per the HTML spec a reconnect that gets
+a non-`2xx` / non-`text/event-stream` response fails the EventSource
+**permanently** (`readyState === CLOSED`), which is what froze the UI.
+
+`core/rate_limiter.py` now resolves the real client IP from `X-Forwarded-For`
+(leftmost entry) / `X-Real-IP`, but **only when the direct peer is
+loopback/RFC1918** so a client cannot forge its IP to dodge the limiter. This
+depends on nginx forwarding the headers:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Real-IP        $remote_addr;
+```
+
+The block in section 5 already sets `X-Forwarded-For`; make sure
+`X-Real-IP` is present too. Confirm the fix by checking that two different
+clients get two different buckets:
+
+```bash
+# Should print two different IPs, both the real clients (not 127.0.0.1)
+curl -s https://<API_FQDN>/api/v1/health -H 'X-Forwarded-For: 203.0.113.7'
+tail -n 50 /var/log/nginx/access.log | grep 'GET /api/v1/jobs/.*/stream'
+```
+
+### 11.2 No reconnect logic on the client
+
+`searchEs.onerror` only logged a line and let the browser handle it, so any
+cancelled SSE (screen lock, 4G→5G handover, carrier NAT idle timeout) left the
+job stuck forever. `clients/www/app.js` now has `openJobStream()`, shared by the
+search and capture flows, which mints a **fresh stream token** per attempt and
+retries with bounded backoff (2s → 10s, 6 tries). The search flow then falls
+back to plain REST polling on `GET /api/v1/jobs/{id}` every 3s, so a dropped
+stream can never freeze the UI again.
+
+Each attempt is traced in the panel with the reason and the retry counter, e.g.
+`SSE … error · flux fermé · hors ligne · retry 3/6 dans 8s`. A `NET` line is
+logged on `online`/`offline` transitions, which pinpoints a network handover.
+
