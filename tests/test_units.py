@@ -315,6 +315,59 @@ class TestOnionCrawler:
         assert tor.get_with_retries.call_count == 2
 
 
+# ── search_term_in_text (snippet citation) ────────────────────────────
+
+
+class TestSearchTermInText:
+    """Le snippet citation : fenêtre ±100 car alignée sur les mots."""
+
+    LEFT = ("alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar papa quebec romeo sierra tango uniform victor")
+    RIGHT = ("whiskey xray yankee zulu argentina bolivia canada denmark egypt "
+             "france germany hungary iceland japan kenya lebanon mexico norway "
+             "oman panama qatar russia spain turkey uganda vietnam")
+
+    def _assert_word_boundaries(self, text: str, snippet: str):
+        """Le corps du snippet (sans « ... ») commence et finit sur une
+        frontière de mot du texte source."""
+        assert snippet.startswith("...") and snippet.endswith("...")
+        body = snippet[3:-3].strip()
+        pos = text.find(body)
+        assert pos != -1
+        assert pos == 0 or text[pos - 1].isspace(), f"bord gauche coupe un mot: {body[:40]!r}"
+        end_pos = pos + len(body)
+        assert end_pos == len(text) or text[end_pos].isspace(), \
+            f"bord droit coupe un mot: {body[-40:]!r}"
+
+    def test_snippet_aligns_on_word_boundaries(self):
+        from core.crawler import search_term_in_text
+
+        text = f"{self.LEFT} secret keyword {self.RIGHT}"
+        count, snippet = search_term_in_text(text, "secret keyword")
+
+        assert count == 1
+        assert "secret keyword" in snippet
+        self._assert_word_boundaries(text, snippet)
+
+    def test_term_inside_longer_word_stays_whole(self):
+        """« secret » dans « secretly » : le mot porteur est montré entier."""
+        from core.crawler import search_term_in_text
+
+        text = f"{self.LEFT} secretly hidden {self.RIGHT}"
+        count, snippet = search_term_in_text(text, "secret")
+
+        assert count == 1
+        assert "secretly" in snippet   # pas de « secret » amputé
+        self._assert_word_boundaries(text, snippet)
+
+    def test_short_text_no_ellipsis(self):
+        from core.crawler import search_term_in_text
+
+        count, snippet = search_term_in_text("hello secret keyword world", "secret keyword")
+        assert count == 1
+        assert snippet == "hello secret keyword world"   # fenêtre > texte : pas de « ... »
+
+
 # ── TorClient.check_reachable ─────────────────────────────────────────
 
 

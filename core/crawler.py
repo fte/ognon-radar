@@ -400,14 +400,50 @@ _INLINE_TAGS = frozenset({
 
 
 def search_term_in_text(text: str, term: str) -> Tuple[int, str]:
-    """Return (occurrence_count, snippet). Count=0 means not found."""
+    """Return (occurrence_count, snippet). Count=0 means not found.
+
+    The snippet is a ±100-character window around the first occurrence,
+    with both edges aligned on word boundaries (a word = a maximal run of
+    non-whitespace): a cut neighbour word is retracted out of the window,
+    and a word that contains the term ("secret" inside "secretly") is
+    shown in full rather than amputated. The term itself is never cut.
+    """
+    term_lower = term.lower()
     text_lower = text.lower()
-    count = text_lower.count(term.lower())
+    count = text_lower.count(term_lower)
     if count == 0:
         return 0, ""
-    index = text_lower.find(term.lower())
+    index = text_lower.find(term_lower)
+    match_end = index + len(term)
     start = max(0, index - 100)
-    end = min(len(text), index + len(term) + 100)
+    end = min(len(text), match_end + 100)
+
+    # Bornes du mot porteur du terme (utile quand le terme n'en est qu'un
+    # fragment : "secret" dans "secretly", ou terme multi-mots).
+    word_start = index
+    while word_start > 0 and not text[word_start - 1].isspace():
+        word_start -= 1
+    word_end = match_end
+    while word_end < len(text) and not text[word_end].isspace():
+        word_end += 1
+
+    # Bord gauche : si la fenêtre coupe un mot, soit c'est le mot du terme
+    # (→ l'étendre jusqu'à son début), soit un voisin (→ le retirer).
+    if start > 0 and not text[start - 1].isspace():
+        if start > word_start:
+            start = word_start
+        else:
+            while start < index and not text[start].isspace():
+                start += 1
+
+    # Bord droit : symétrique.
+    if end < len(text) and not text[end].isspace():
+        if end < word_end:
+            end = word_end
+        else:
+            while end > match_end and not text[end - 1].isspace():
+                end -= 1
+
     snippet = text[start:end].strip()
     if start > 0:
         snippet = "..." + snippet
