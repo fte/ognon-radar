@@ -34,6 +34,18 @@ retry:
 security:
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
   api_key: ""  # Set to a strong random value before going live. Key holder = admin scope.
+  # Reverse proxies whose X-Real-IP / X-Forwarded-For we accept. On this native
+  # VPS nginx runs on the same host, so loopback is the whole trust boundary —
+  # pinned explicitly rather than relying on the RFC1918 default, which would
+  # also let any LAN peer forge its IP.
+  # Moving nginx into Docker? The api service must then be reachable from a
+  # bridge network, and the whole bridge subnet trusted:
+  #   ["172.16.0.0/12"]   (or ["127.0.0.1/32", "::1/128", "172.16.0.0/12"])
+  # and the api command needs `ports: ["8337:8000"]` removed from
+  # docker-compose.yml so the port is not also published directly.
+  trusted_proxies:
+    - "127.0.0.1/32"
+    - "::1/128"
 
 cors:
   # List explicit origins, e.g. "https://your-frontend.example.com".

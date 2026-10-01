@@ -71,6 +71,11 @@ class Settings:
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         )
         self.api_key: str = security_config.get('api_key', '')
+        # Networks whose X-Real-IP / X-Forwarded-For we are willing to believe.
+        # Empty list = default heuristic (loopback + RFC1918 + IPv6 ULA/link-local).
+        # Set it explicitly to narrow the trust boundary (e.g. ["127.0.0.1/32"])
+        # or to declare proxies living outside private space.
+        self.trusted_proxies: List[str] = security_config.get('trusted_proxies', [])
         
         # CORS
         cors_config = config.get('cors', {})
