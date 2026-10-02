@@ -10,7 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as futu
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote as url_quote
 from datetime import datetime, timezone
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
+from bisect import bisect_right
 
 from config import settings
 from core.constants import BLACKLIST_PATHS, ONION_URL_REGEX
@@ -227,15 +228,227 @@ def extract_text_content(soup: BeautifulSoup) -> str:
     return re.sub(r'\s+', ' ', soup.get_text(separator=' ', strip=True))
 
 
+def extract_matching_paragraphs(soup: BeautifulSoup, term: str, max_paragraphs: int = 5) -> List[str]:
+    """Extract unique block-level text fragments containing the search term.
+
+    Walks block-level containers (p, li, td, blockquote, div…) and keeps the
+    text of those that contain the term (case-insensitive). A container whose
+    *descendant blocks* also match is skipped — the innermost block wins, so
+    <body>/<div> wrappers never shadow the actual paragraphs they contain.
+    Exact duplicate texts are deduplicated ("unique paragraphs").
+
+    Returns plain text only — the site's HTML is never passed through, so the
+    client can safely wrap matches in <mark> without XSS risk.
+
+    Linear-time design (the naive version re-ran get_text() per block AND per
+    ancestor-descendant check, i.e. O(n²) on deep pages):
+      1. one normalized text buffer for the whole document, built in a single
+         pass over the plain NavigableStrings (comments, script/style/CDATA
+         and doctype are excluded, mirroring get_text());
+      2. a [start, end) span per element into that buffer, merged bottom-up —
+         an element's text IS buffer[span], no per-element copies;
+      3. term occurrences located once in the buffer, then marked on every
+         element whose span fully contains one (with early exit when an
+         ancestor is already marked) — equivalent to the old per-element
+         ``term in block_text(el)`` scan;
+      4. "has a matching block descendant" recomputed bottom-up from the
+         children instead of walking each element's subtree.
+    """
+    term_lower = term.lower()
+    elements = soup.find_all(True)
+    if not elements:
+        return []
+
+    def is_block(el) -> bool:
+        return el.name not in _INLINE_TAGS and el.name not in ('script', 'style', 'meta', 'link')
+
+    # Tag equality in bs4 is STRUCTURAL (two identical subtrees compare equal
+    # and share the same hash), so Tags are unusable as dict/set keys — every
+    # lookup would fall back to an O(subtree) __eq__. All per-element state is
+    # therefore keyed by id(el); els never outlive the soup within this call.
+    # ── 1. Global buffer: cleaned text of every plain string, in document
+    #      order, joined by single spaces — exactly what get_text()+re.sub
+    #      produced per element, but computed once for the whole document.
+    parts: List[str] = []
+    string_start: List[int] = []   # buffer offset where each segment begins
+    string_len: List[int] = []
+    string_parent: List[int] = []  # id() of the owning Tag of each segment
+    pos = 0
+    for s in soup.descendants:
+        if type(s) is not NavigableString:
+            continue  # Comment/CData/Doctype/Script/Stylesheet are not "text"
+        parent = s.parent
+        if not isinstance(parent, Tag):
+            continue  # soup-level stray text belongs to no element
+        cleaned = re.sub(r'\s+', ' ', str(s)).strip()
+        if not cleaned:
+            continue  # get_text(strip=True) drops it; separators collapse anyway
+        if parts:
+            parts.append(' ')
+            pos += 1
+        string_start.append(pos)
+        string_len.append(len(cleaned))
+        string_parent.append(id(parent))
+        parts.append(cleaned)
+        pos += len(cleaned)
+    buffer = ''.join(parts)
+    del parts
+
+    # ── 2. Per-element spans, merged bottom-up (reverse document order means
+    #      every child span is final by the time its parent is visited).
+    span_start: Dict[int, int] = {}
+    span_end: Dict[int, int] = {}
+    own: Dict[int, List[int]] = {}  # id(el) -> indices of its direct strings
+    for i, p_id in enumerate(string_parent):
+        own.setdefault(p_id, []).append(i)
+
+    for el in reversed(elements):
+        el_id = id(el)
+        s_min = None
+        e_max = None
+        for i in own.get(el_id, ()):
+            if s_min is None or string_start[i] < s_min:
+                s_min = string_start[i]
+            e = string_start[i] + string_len[i]
+            if e_max is None or e > e_max:
+                e_max = e
+        for child in el.children:
+            if isinstance(child, Tag):
+                cs = span_start.get(id(child))
+                if cs is None:
+                    continue
+                if s_min is None or cs < s_min:
+                    s_min = cs
+                ce = span_end[id(child)]
+                if e_max is None or ce > e_max:
+                    e_max = ce
+        if s_min is not None:
+            span_start[el_id] = s_min
+            span_end[el_id] = e_max
+
+    # ── 3. Mark every element whose span fully contains a term occurrence
+    #      (equivalent to the old ``term_lower in block_text(el).lower()``).
+    #      Occurrences are found once; marking walks up from the deepest
+    #      covering element and stops at the first already-marked ancestor,
+    #      so total work stays linear in practice.
+    match_set: Set[int] = set()
+    if term_lower == '':
+        # Degenerate empty term: the old code matched every non-empty block.
+        match_set.update(id(el) for el in elements)
+    elif buffer:
+        buffer_lower = buffer.lower()
+        tag_by_id: Dict[int, Tag] = {id(el): el for el in elements}
+        occ = buffer_lower.find(term_lower)
+        while occ != -1:
+            occ_end = occ + len(term_lower)
+            # Deepest element whose span contains [occ, occ_end): start from
+            # the segment holding `occ` and climb while the span is too short.
+            seg = bisect_right(string_start, occ) - 1
+            el: Optional[Tag] = tag_by_id.get(string_parent[seg]) if seg >= 0 else None
+            while el is not None and span_end.get(id(el), -1) < occ_end:
+                el = el.parent
+            while el is not None:
+                el_id = id(el)
+                if el_id in match_set:
+                    break  # already marked: so are its ancestors, stop early
+                if el_id in span_end:
+                    match_set.add(el_id)
+                el = el.parent
+            occ = buffer_lower.find(term_lower, occ + 1)
+
+    # ── 4. "A matching block descendant exists": bottom-up from the children
+    #      instead of re-walking each matching element's subtree.
+    has_matching_block_child: Set[int] = set()
+    for el in reversed(elements):
+        el_id = id(el)
+        for child in el.children:
+            if isinstance(child, Tag):
+                c_id = id(child)
+                if (c_id in match_set and is_block(child)) or c_id in has_matching_block_child:
+                    has_matching_block_child.add(el_id)
+                    break
+
+    # ── 5. Same selection as before: document order, innermost block wins,
+    #      dedup, cap.
+    matches: List[str] = []
+    seen: Set[str] = set()
+    for el in elements:
+        el_id = id(el)
+        if el_id not in match_set or el_id in has_matching_block_child:
+            continue
+        if not is_block(el):
+            continue
+        text = buffer[span_start[el_id]:span_end[el_id]]
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        matches.append(text[:1000])
+        if len(matches) >= max_paragraphs:
+            break
+
+    return matches
+
+
+# Inline elements are never treated as "paragraphs"; their text is covered by
+# the nearest block-level ancestor, so skipping them avoids duplicates.
+_INLINE_TAGS = frozenset({
+    'a', 'abbr', 'b', 'bdi', 'bdo', 'big', 'br', 'button', 'cite', 'code',
+    'data', 'dfn', 'em', 'font', 'i', 'img', 'input', 'kbd', 'label', 'map',
+    'mark', 'output', 'q', 'samp', 'select', 'small', 'span', 'strong',
+    'sub', 'sup', 'textarea', 'time', 'tt', 'u', 'var', 'wbr',
+})
+
+
 def search_term_in_text(text: str, term: str) -> Tuple[int, str]:
-    """Return (occurrence_count, snippet). Count=0 means not found."""
+    """Return (occurrence_count, snippet). Count=0 means not found.
+
+    The snippet is a ±100-character window around the first occurrence,
+    with both edges aligned on word boundaries (a word = a maximal run of
+    non-whitespace): a cut neighbour word is retracted out of the window,
+    and a word that contains the term ("secret" inside "secretly") is
+    shown in full rather than amputated. The term itself is never cut.
+
+    A blank (empty or whitespace-only) term never matches: Python counts it as
+    occurring at every position, which would flag every crawled page as a hit.
+    """
+    if not term.strip():
+        return 0, ""
+    term_lower = term.lower()
     text_lower = text.lower()
-    count = text_lower.count(term.lower())
+    count = text_lower.count(term_lower)
     if count == 0:
         return 0, ""
-    index = text_lower.find(term.lower())
+    index = text_lower.find(term_lower)
+    match_end = index + len(term)
     start = max(0, index - 100)
-    end = min(len(text), index + len(term) + 100)
+    end = min(len(text), match_end + 100)
+
+    # Bornes du mot porteur du terme (utile quand le terme n'en est qu'un
+    # fragment : "secret" dans "secretly", ou terme multi-mots).
+    word_start = index
+    while word_start > 0 and not text[word_start - 1].isspace():
+        word_start -= 1
+    word_end = match_end
+    while word_end < len(text) and not text[word_end].isspace():
+        word_end += 1
+
+    # Bord gauche : si la fenêtre coupe un mot, soit c'est le mot du terme
+    # (→ l'étendre jusqu'à son début), soit un voisin (→ le retirer).
+    if start > 0 and not text[start - 1].isspace():
+        if start > word_start:
+            start = word_start
+        else:
+            while start < index and not text[start].isspace():
+                start += 1
+
+    # Bord droit : symétrique.
+    if end < len(text) and not text[end].isspace():
+        if end < word_end:
+            end = word_end
+        else:
+            while end > match_end and not text[end - 1].isspace():
+                end -= 1
+
     snippet = text[start:end].strip()
     if start > 0:
         snippet = "..." + snippet
@@ -441,6 +654,20 @@ class OnionCrawler:
         """
         crawled_urls: Set[str] = set()
         results: List[dict] = []
+        # URLs already present in `results` — one row per URL, ever. A SERP can
+        # list the same target repeatedly (and the BFS then follows it too);
+        # without this set the same page surfaces as duplicate rows.
+        surfaced_urls: Set[str] = set()
+        # url -> (term_count, paragraphs) for pages already matched during the
+        # BFS — lets the SERP-enrichment pass reuse them without a second
+        # Tor fetch when a SERP entry points at an already-crawled page. The
+        # enrichment pass writes back into it, so repeated targets are only
+        # ever fetched once for paragraphs.
+        match_cache: Dict[str, Tuple[int, List[str]]] = {}
+        # URLs crawled during the BFS that do NOT contain the term. The
+        # enrichment pass must not re-fetch them through Tor: the outcome is
+        # already known (no match → no paragraphs).
+        no_match_urls: Set[str] = set()
 
         queue: deque = deque([(start_url, 0)])
 
@@ -470,6 +697,20 @@ class OnionCrawler:
                     needed = max_results - len(results)
                     if needed <= 0:
                         break
+                    # Dedupe BEFORE probing: the same target can appear many
+                    # times in one SERP (or already be a result row from an
+                    # earlier page). Probing or surfacing it twice would burn
+                    # Tor fetches and create duplicate rows.
+                    unique_entries: List[Dict[str, str]] = []
+                    seen_here: Set[str] = set()
+                    for entry in entries:
+                        url = entry['url']
+                        if url in surfaced_urls or url in seen_here:
+                            continue
+                        seen_here.add(url)
+                        unique_entries.append(entry)
+                    entries = unique_entries
+
                     verdicts, unprobed_idx = self._probe_serp_reachability(entries, needed)
                     probed = len(verdicts)
                     skipped = sum(1 for up in verdicts.values() if not up)
@@ -491,6 +732,7 @@ class OnionCrawler:
                     surfaced += [entries[idx] for idx in unprobed_idx]
 
                     for entry in surfaced:
+                        surfaced_urls.add(entry['url'])
                         results.append({
                             'url': entry['url'],
                             'title': entry['title'],
@@ -499,6 +741,7 @@ class OnionCrawler:
                             'seed': start_url,
                             'depth': depth + 1,
                             'term_count': 1,
+                            'paragraphs': None,  # SERP entries: page not crawled
                         })
                         if len(results) >= max_results:
                             break
@@ -506,17 +749,33 @@ class OnionCrawler:
                 else:
                     # Normal page: search for term in text
                     count, snippet = search_term_in_text(text, search_term)
+                    if not count:
+                        no_match_urls.add(current_url)
                     if count:
-                        results.append({
-                            'url': current_url,
-                            'title': title,
-                            'snippet': snippet,
-                            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                            'seed': start_url,
-                            'depth': depth,
-                            'term_count': count,
-                        })
-                        logger.info(f"Found '{search_term}' in {current_url} ({count} times)")
+                        paragraphs = extract_matching_paragraphs(soup, search_term)
+                        match_cache[current_url] = (count, paragraphs)
+                        if current_url in surfaced_urls:
+                            # Already a result row (e.g. surfaced from a SERP):
+                            # refresh the cache only — the enrichment pass will
+                            # attach these paragraphs to the existing row.
+                            # Never a duplicate row, never a refetch later.
+                            logger.info(
+                                f"Already surfaced {current_url} — "
+                                f"match cache refreshed ({count} times)"
+                            )
+                        else:
+                            surfaced_urls.add(current_url)
+                            results.append({
+                                'url': current_url,
+                                'title': title,
+                                'snippet': snippet,
+                                'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                'seed': start_url,
+                                'depth': depth,
+                                'term_count': count,
+                                'paragraphs': paragraphs,
+                            })
+                            logger.info(f"Found '{search_term}' in {current_url} ({count} times, {len(paragraphs)} paragraphs)")
 
                 if depth < max_depth:
                     links = extract_onion_links(current_url, soup)
@@ -528,5 +787,32 @@ class OnionCrawler:
                 if progress_cb:
                     progress_cb(len(crawled_urls), len(results))
                 time.sleep(settings.crawl_delay)
+
+        # Enrich SERP-derived results (paragraphs=None): the SERP page only
+        # proves the entry exists — the paragraph text lives on the target
+        # page. Each target is fetched at most once through Tor: cache hits
+        # (BFS match or an earlier enrichment of the same URL) are reused, and
+        # fresh fetches are written back into match_cache so a URL listed
+        # twice never costs a second fetch.
+        for result in results:
+            if result.get('paragraphs') is not None:
+                continue
+            if result['url'] in no_match_urls:
+                continue  # crawled during BFS: no term match, nothing to add
+            cached = match_cache.get(result['url'])
+            if cached is not None:
+                result['term_count'], result['paragraphs'] = cached
+                continue
+            scraped = self.scrape_page(result['url'], timeout)
+            if not scraped:
+                continue
+            _, text, soup = scraped
+            count, _ = search_term_in_text(text, search_term)
+            if count:
+                paragraphs = extract_matching_paragraphs(soup, search_term)
+                match_cache[result['url']] = (count, paragraphs)
+                result['term_count'] = count
+                result['paragraphs'] = paragraphs
+            time.sleep(settings.crawl_delay)
 
         return results, len(crawled_urls)

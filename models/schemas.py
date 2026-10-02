@@ -94,6 +94,14 @@ class SearchResult(BaseModel):
     seed: str = Field(..., description="Search engine or seed URL that led to this result")
     depth: int = Field(..., description="Crawl depth from the seed URL")
     term_count: int = Field(..., description="Number of times the search term appeared")
+    paragraphs: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Unique block-level text fragments (plain text, max 5) containing the "
+            "search term, extracted from the crawled page. Clients may highlight "
+            "term occurrences in these. Null for SERP-derived results."
+        ),
+    )
     screenshot_path: Optional[str] = Field(None, description="Relative URL to screenshot PNG, if captured")
 
 

@@ -185,6 +185,188 @@ class TestOnionCrawler:
 
         assert len(results) <= 2
 
+    def test_crawl_returns_unique_paragraphs(self, _patch_config):
+        """Results carry plain-text paragraphs containing the term."""
+        crawler, tor = self._make_crawler()
+        html = (
+            "<html><head><title>Test</title></head><body>"
+            "<p>The secret keyword is here.</p>"
+            "<p>Another paragraph with SECRET KEYWORD inside.</p>"
+            "<p>Nothing relevant in this one.</p>"
+            "</body></html>"
+        )
+        tor.get_with_retries.return_value = self._make_response(html)
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=3,
+            timeout=10,
+        )
+
+        assert len(results) == 1
+        paragraphs = results[0]["paragraphs"]
+        assert len(paragraphs) == 2
+        assert all("secret keyword" in p.lower() for p in paragraphs)
+        # Plain text only — no HTML from the crawled site may leak through.
+        assert all("<" not in p and ">" not in p for p in paragraphs)
+
+    def test_extract_matching_paragraphs_dedupes_and_caps(self, _patch_config):
+        """Nested/duplicated blocks appear once; cap of 5 unique fragments."""
+        from core.crawler import extract_matching_paragraphs
+
+        soup = BeautifulSoup(
+            "<html><body>"
+            "<div><p>needle in a paragraph</p></div>"  # nested: div contains p
+            "<p>needle in a paragraph</p>"              # exact duplicate text
+            + "".join(f"<p>unique hit number {i} needle</p>" for i in range(10))
+            + "</body></html>",
+            "lxml",
+        )
+
+        paragraphs = extract_matching_paragraphs(soup, "needle")
+
+        # Deduplication: "needle in a paragraph" appears once (outermost wins).
+        assert sum(1 for p in paragraphs if p == "needle in a paragraph") == 1
+        # Hard cap of 5 unique fragments.
+        assert len(paragraphs) == 5
+        # Case-insensitive matching.
+        soup2 = BeautifulSoup("<p>UPPERCASE Needle Here</p>", "lxml")
+        assert extract_matching_paragraphs(soup2, "needle") == ["UPPERCASE Needle Here"]
+
+    def test_serp_results_get_paragraphs_from_target(self, _patch_config):
+        """SERP-derived entries are enriched with paragraphs from the target page."""
+        crawler, tor = self._make_crawler()
+        # Ahmia SERP stub: redirect link wrapped as Ahmia does.
+        target = "http://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.onion/page"
+        html = (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + target + '">Result</a></h4>'
+            "<p>a snippet mentioning secret keyword</p></li>"
+            "</body></html>"
+        )
+        # First call = the SERP page; the crawler then fetches the target
+        # page to enrich the SERP result with paragraphs from it.
+        tor.get_with_retries.side_effect = [
+            self._make_response(html),
+            self._make_response(
+                "<html><head><title>Target</title></head><body>"
+                "<p>the secret keyword lives on this target page</p>"
+                "</body></html>"
+            ),
+        ]
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=3,
+            timeout=10,
+        )
+
+        # One row per URL: the SERP entry and the BFS match on the same target
+        # are merged — the BFS match refreshes the paragraph cache instead of
+        # adding a duplicate row.
+        assert len(results) == 1
+        assert results[0]["url"] == target
+        assert results[0]["paragraphs"] == ["the secret keyword lives on this target page"]
+        assert results[0]["term_count"] == 1
+        # SERP entry + target page + no duplicate fetch for the enrichment = 2 calls.
+        assert tor.get_with_retries.call_count == 2
+
+    def test_serp_duplicate_targets_are_fetched_once(self, _patch_config):
+        """A target listed twice in the SERP yields ONE row and ONE Tor fetch."""
+        crawler, tor = self._make_crawler()
+        target = "http://cccccccccccccccccccccccccccccccccccccccccccccccccccccccc.onion/page"
+        html = (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + target + '">First</a></h4>'
+            "<p>snippet one with secret keyword</p></li>"
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + target + '">Second</a></h4>'
+            "<p>snippet two with secret keyword</p></li>"
+            "</body></html>"
+        )
+        tor.get_with_retries.side_effect = [
+            self._make_response(html),
+            self._make_response(
+                "<html><head><title>Target</title></head><body>"
+                "<p>the secret keyword lives on this target page</p>"
+                "</body></html>"
+            ),
+        ]
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=5,
+            timeout=10,
+        )
+
+        assert len(results) == 1
+        assert results[0]["url"] == target
+        assert results[0]["paragraphs"] == ["the secret keyword lives on this target page"]
+        # SERP page + single target fetch: the duplicate entry never costs a
+        # second Tor round-trip (neither probing, surfacing, nor enrichment).
+        assert tor.get_with_retries.call_count == 2
+
+
+# ── search_term_in_text (snippet citation) ────────────────────────────
+
+
+class TestSearchTermInText:
+    """Le snippet citation : fenêtre ±100 car alignée sur les mots."""
+
+    LEFT = ("alpha bravo charlie delta echo foxtrot golf hotel india juliet "
+            "kilo lima mike november oscar papa quebec romeo sierra tango uniform victor")
+    RIGHT = ("whiskey xray yankee zulu argentina bolivia canada denmark egypt "
+             "france germany hungary iceland japan kenya lebanon mexico norway "
+             "oman panama qatar russia spain turkey uganda vietnam")
+
+    def _assert_word_boundaries(self, text: str, snippet: str):
+        """Le corps du snippet (sans « ... ») commence et finit sur une
+        frontière de mot du texte source."""
+        assert snippet.startswith("...") and snippet.endswith("...")
+        body = snippet[3:-3].strip()
+        pos = text.find(body)
+        assert pos != -1
+        assert pos == 0 or text[pos - 1].isspace(), f"bord gauche coupe un mot: {body[:40]!r}"
+        end_pos = pos + len(body)
+        assert end_pos == len(text) or text[end_pos].isspace(), \
+            f"bord droit coupe un mot: {body[-40:]!r}"
+
+    def test_snippet_aligns_on_word_boundaries(self):
+        from core.crawler import search_term_in_text
+
+        text = f"{self.LEFT} secret keyword {self.RIGHT}"
+        count, snippet = search_term_in_text(text, "secret keyword")
+
+        assert count == 1
+        assert "secret keyword" in snippet
+        self._assert_word_boundaries(text, snippet)
+
+    def test_term_inside_longer_word_stays_whole(self):
+        """« secret » dans « secretly » : le mot porteur est montré entier."""
+        from core.crawler import search_term_in_text
+
+        text = f"{self.LEFT} secretly hidden {self.RIGHT}"
+        count, snippet = search_term_in_text(text, "secret")
+
+        assert count == 1
+        assert "secretly" in snippet   # pas de « secret » amputé
+        self._assert_word_boundaries(text, snippet)
+
+    def test_short_text_no_ellipsis(self):
+        from core.crawler import search_term_in_text
+
+        count, snippet = search_term_in_text("hello secret keyword world", "secret keyword")
+        assert count == 1
+        assert snippet == "hello secret keyword world"   # fenêtre > texte : pas de « ... »
+
 
 # ── TorClient.check_reachable ─────────────────────────────────────────
 

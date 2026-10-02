@@ -719,9 +719,11 @@ output[data-href]:hover {
 .workspace-grid {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 350px;
   gap: 14px;
   align-items: start;
+  /* Ligne 1 : 01 Recherche + 02 Process + 03 Réseau XHR côte à côte ;
+     04 Captures (panel--wide) occupe la ligne 2 en pleine largeur. */
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr) minmax(0, 360px);
 }
 
 .mid-col {
@@ -1048,7 +1050,7 @@ article {
 }
 
 article.has-thumb {
-  grid-template-columns: 90px minmax(0, 1fr);
+  grid-template-columns: 180px minmax(0, 1fr);
   align-items: start;
   column-gap: 14px;
 }
@@ -1104,6 +1106,29 @@ article footer {
   font-family: var(--font-data);
   font-size: .72rem;
   color: var(--spx-muted);
+}
+
+/* ───── Paragraphes uniques avec terme surligné ───── */
+.result-paragraphs {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--spx-lime);
+  background: rgba(229, 255, 26, .05);
+  border-radius: 0 4px 4px 0;
+}
+
+.result-paragraph {
+  font-size: .82rem;
+  color: #c9c9c9;
+}
+
+.result-paragraph mark {
+  background: var(--spx-lime);
+  color: var(--spx-black);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
 }
 
 .capture-bar {
@@ -1178,8 +1203,8 @@ article footer {
 
 /* Screenshot thumbnail */
 .result-thumb {
-  width: 90px;
-  height: 64px;
+  width: 180px;
+  height: 128px;
   object-fit: cover;
   border: 1px solid var(--spx-line);
   border-radius: 2px;

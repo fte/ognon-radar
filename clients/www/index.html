@@ -129,60 +129,56 @@
           </div>
         </section>
 
-        <!-- Colonne centrale : process + réseau -->
-        <div class="mid-col">
-          <!-- 02 · Process -->
-          <section class="panel process-panel" aria-labelledby="process-title">
-            <header class="panel-head">
-              <span class="panel-num">02</span>
-              <h2 class="panel-title" id="process-title">Process</h2>
-              <span class="panel-tag">étape 2 · live</span>
-            </header>
-            <div class="panel-body">
-              <div id="job-meter" class="job-meter" data-state="idle">
-                <span></span>
+        <!-- 02 · Process -->
+        <section class="panel process-panel" aria-labelledby="process-title">
+          <header class="panel-head">
+            <span class="panel-num">02</span>
+            <h2 class="panel-title" id="process-title">Process</h2>
+            <span class="panel-tag">étape 2 · live</span>
+          </header>
+          <div class="panel-body">
+            <div id="job-meter" class="job-meter" data-state="idle">
+              <span></span>
+            </div>
+
+            <output id="status" aria-live="polite">Prêt.</output>
+
+            <dl id="job-details">
+              <div>
+                <dt>Job</dt>
+                <dd id="job-id">-</dd>
               </div>
+              <div>
+                <dt>Statut</dt>
+                <dd id="job-status">-</dd>
+              </div>
+              <div>
+                <dt>Début</dt>
+                <dd id="job-started">-</dd>
+              </div>
+              <div>
+                <dt>Fin</dt>
+                <dd id="job-completed">-</dd>
+              </div>              </dl>
+          </div>
+        </section>
 
-              <output id="status" aria-live="polite">Prêt.</output>
+        <!-- 03 · Réseau XHR -->
+        <section class="panel xhr-panel" aria-labelledby="xhr-title">
+          <header class="panel-head">
+            <span class="panel-num">03</span>
+            <h2 class="panel-title" id="xhr-title">Réseau · XHR</h2>
+            <output id="xhr-count" class="xhr-count" aria-live="polite">0</output>
+            <button type="button" id="xhr-clear" class="btn-ghost">effacer</button>
+          </header>
+          <div class="panel-body">
+            <p class="panel-note panel-note--compact">Chaque appel réel de <code>window.fetch</code> — méthode · chemin · code · durée · corps de réponse.</p>
+            <ol id="poll-log" class="poll-log" aria-live="polite" aria-label="Journal des appels XHR"></ol>
+          </div>
+        </section>
 
-              <dl id="job-details">
-                <div>
-                  <dt>Job</dt>
-                  <dd id="job-id">-</dd>
-                </div>
-                <div>
-                  <dt>Statut</dt>
-                  <dd id="job-status">-</dd>
-                </div>
-                <div>
-                  <dt>Début</dt>
-                  <dd id="job-started">-</dd>
-                </div>
-                <div>
-                  <dt>Fin</dt>
-                  <dd id="job-completed">-</dd>
-                </div>
-              </dl>
-            </div>
-          </section>
-
-          <!-- 03 · Réseau XHR -->
-          <section class="panel xhr-panel" aria-labelledby="xhr-title">
-            <header class="panel-head">
-              <span class="panel-num">03</span>
-              <h2 class="panel-title" id="xhr-title">Réseau · XHR</h2>
-              <output id="xhr-count" class="xhr-count" aria-live="polite">0</output>
-              <button type="button" id="xhr-clear" class="btn-ghost">effacer</button>
-            </header>
-            <div class="panel-body">
-              <p class="panel-note panel-note--compact">Chaque appel réel de <code>window.fetch</code> — méthode · chemin · code · durée · corps de réponse.</p>
-              <ol id="poll-log" class="poll-log" aria-live="polite" aria-label="Journal des appels XHR"></ol>
-            </div>
-          </section>
-        </div>
-
-        <!-- 04 · Captures -->
-        <section class="panel result-panel" aria-labelledby="results-title">
+        <!-- 04 · Captures (pleine largeur, ligne 2) -->
+        <section class="panel result-panel panel--wide" aria-labelledby="results-title">
           <header class="panel-head">
             <span class="panel-num">04</span>
             <h2 class="panel-title" id="results-title">Captures</h2>

@@ -415,7 +415,7 @@ async function streamSearchJob(id) {
         setEndpointState("job", "done");
         setStatus("Job termine. Resultats charges.", "completed");
         setMeterState("completed");
-        renderResults(job.result);
+        renderResults(job.result, job.request?.term);
         return;
       }
 
@@ -472,7 +472,7 @@ function pollSearchJob(id) {
         setEndpointState("job", "done");
         setStatus("Job termine. Resultats charges.", "completed");
         setMeterState("completed");
-        renderResults(job.result);
+        renderResults(job.result, job.request?.term);
         return;
       }
       if (job.status === "failed" || job.status === "cancelled") {
@@ -731,7 +731,10 @@ function formatDate(value) {
   }).format(date);
 }
 
-function renderResults(result) {
+/* term = terme du job rendu (job.request.term), scopé à ce rendu : pas d'état
+   global, donc un ancien job qui se termine surligne avec SON terme, même si
+   une nouvelle recherche a démarré entre-temps. */
+function renderResults(result, term = "") {
   // Capture job
   if (result?.download_url) {
     const url = `${API_BASE_URL}${result.download_url}`;
@@ -757,7 +760,7 @@ function renderResults(result) {
   summary.textContent = `${total} resultat(s), ${pages} page(s) lue(s), duree ${duration}.`;
 
   const thumbMap = new Map(); // url → <img> element
-  results.replaceChildren(...items.map(item => renderResult(item, thumbMap)));
+  results.replaceChildren(...items.map(item => renderResult(item, thumbMap, term)));
 
   if (items.length === 0) {
     summary.textContent = "Job termine, aucun resultat trouve.";
@@ -771,7 +774,53 @@ function renderResults(result) {
   }
 }
 
-function renderResult(item, thumbMap) {
+/* ───── Surlignage des paragraphes ─────
+
+   Le serveur renvoie les paragraphes en TEXTE BRUT (champ `paragraphs`);
+   ils ne contiennent donc aucun HTML du site crawle. On les insere via
+   textContent + split du terme, et on entoure chaque occurrence d'un <mark>.
+   Aucune chaine du site distant ne passe par innerHTML → pas de risque XSS.
+   Surlignage insensible a la casse, occurrences multiples par paragraphe. */
+
+function highlightTermInText(text, term) {
+  const frag = document.createDocumentFragment();
+  if (!term) {
+    frag.append(text);
+    return frag;
+  }
+  const lowerText = text.toLowerCase();
+  const lowerTerm = term.toLowerCase();
+  let i = 0;
+  while (i < text.length) {
+    const hit = lowerText.indexOf(lowerTerm, i);
+    if (hit === -1) {
+      frag.append(text.slice(i));
+      break;
+    }
+    if (hit > i) frag.append(text.slice(i, hit));
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(hit, hit + term.length);
+    frag.append(mark);
+    i = hit + term.length;
+  }
+  return frag;
+}
+
+function renderHighlightedParagraphs(item, term) {
+  const wrap = document.createElement("div");
+  wrap.className = "result-paragraphs";
+  const paragraphs = Array.isArray(item.paragraphs) ? item.paragraphs : [];
+  if (paragraphs.length === 0) return null;
+  for (const text of paragraphs) {
+    const p = document.createElement("p");
+    p.className = "result-paragraph";
+    p.append(highlightTermInText(String(text), term));
+    wrap.append(p);
+  }
+  return wrap;
+}
+
+function renderResult(item, thumbMap, term) {
   const row = document.createElement("li");
   const article = document.createElement("article");
   const title = document.createElement("h3");
@@ -797,6 +846,8 @@ function renderResult(item, thumbMap) {
   snippet.textContent = item.snippet || "Aucun extrait disponible.";
   footer.textContent = `Occurrences: ${item.term_count ?? "-"} - profondeur: ${item.depth ?? "-"}`;
 
+  const paragraphsBlock = renderHighlightedParagraphs(item, term);
+
   captureBtn.type = "button";
   captureBtn.className = "btn-capture";
   captureBtn.textContent = "Capturer";
@@ -820,7 +871,9 @@ function renderResult(item, thumbMap) {
 
   captureBtn.addEventListener("click", () => startCapture(item.url, captureBtn, captureStatus));
 
-  article.append(title, snippet, footer, captureBar);
+  article.append(title, snippet);
+  if (paragraphsBlock) article.append(paragraphsBlock);
+  article.append(footer, captureBar);
   row.append(article);
   return row;
 }
@@ -1048,3 +1101,54 @@ function isOnionUrl(url) {
 function torHref(url) {
   return "tor://" + url.replace(/^[a-z]+:\/\//i, "");
 }
+
+/* ───── Deep-links de recherche ─────
+   ?term=<terme> préremplit le formulaire ; &autostart=1 le soumet aussitôt.
+   ?job=<id> affiche directement les résultats d'un job existant (partage).
+   Utile pour partager une recherche ou piloter le client automatiquement. */
+(function autoStartFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const term = (params.get("term") || "").trim();
+  const jobId = (params.get("job") || "").trim();
+
+  if (term) {
+    document.querySelector("#term").value = term;
+    for (const [param, id] of [["max_results", "max-results"], ["max_depth", "max-depth"], ["max_pages", "max-pages"]]) {
+      const v = Number(params.get(param));
+      if (Number.isFinite(v) && v > 0) document.getElementById(id).value = v;
+    }
+    if (params.get("autostart") === "1") {
+      // Laisse le temps au health-check de s'afficher avant de lancer le job.
+      window.addEventListener("load", () => {
+        setTimeout(() => document.querySelector("#search-form").requestSubmit(), 300);
+      });
+    }
+    return;
+  }
+
+  if (jobId) {
+    window.addEventListener("load", () => {
+      (async () => {
+        try {
+          const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`, {
+            headers: getClientHeaders(),
+          });
+          const job = await r.json();
+          if (!r.ok || !job) throw new Error(job?.error || `HTTP ${r.status}`);
+          document.getElementById("job-id").textContent = job.id || jobId;
+          document.getElementById("job-status").textContent = statusLabel(job.status);
+          document.getElementById("job-started").textContent = formatDate(job.started_at);
+          document.getElementById("job-completed").textContent = formatDate(job.completed_at);
+          if (job.status === "completed" && job.result) {
+            setStatus(statusLabel(job.status), "done");
+            renderResults(job.result, job.request?.term);
+          } else {
+            setStatus(statusLabel(job.status), job.status === "failed" ? "failed" : "running");
+          }
+        } catch (e) {
+          setStatus(`Job introuvable : ${e.message}`, "failed");
+        }
+      })();
+    });
+  }
+})();
