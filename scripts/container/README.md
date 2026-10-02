@@ -15,7 +15,7 @@ Ce dossier contient l'équivalent **Apple Container** (CLI `container`, GitHub
 - macOS 26 (Tahoe) ou ultérieur, **Apple silicon** (M1/M2/M3/M4…).
 - CLI `container` installé :
   <https://github.com/apple/container/releases>
-- Service système démarré :
+- Service système démarré (automatiquement par `make up` / `make up-build`) :
 
   ```bash
   container system start
@@ -29,6 +29,18 @@ Le `Makefile` détecte automatiquement le backend installé : si le CLI
 aucun backend n'est installé, `make` échoue avec des instructions
 (`_guard-runtime`). Forcer un backend avec `RUNTIME=docker` ou
 `RUNTIME=container`, et vérifier le choix avec `make runtime`.
+
+`make up` et `make up-build` démarrent aussi le moteur s'il est arrêté
+(`scripts/ensure-engine.sh`) :
+
+| Moteur | Commande de démarrage |
+|---|---|
+| Apple `container` | `container system start` |
+| Colima (si installé) | `colima start` |
+| Docker Desktop | `open -a Docker` |
+
+Si le démon répond déjà, l'étape est un no-op silencieux. Délai d'attente
+réglable avec `ENGINE_WAIT_TIMEOUT` (150 s par défaut).
 
 ```bash
 # Tout construire puis lancer tor + api

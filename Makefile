@@ -9,6 +9,12 @@
 #   RUNTIME=docker     force docker-compose
 #   RUNTIME=container  force scripts/container/*.sh
 #
+# `up` / `up-build` also start the engine when it is not running yet:
+#   container → `container system start`
+#   colima    → `colima start`            (no Colima? Docker Desktop is opened)
+#   docker    → `open -a Docker`
+# No-op when the daemon already answers (scripts/ensure-engine.sh).
+#
 # Examples:
 #   make up                     # auto-detect
 #   make up RUNTIME=docker      # force the docker backend
@@ -75,7 +81,7 @@ else
   CLEAN_CMD    := $(DOCKER_COMPOSE) down -v
 endif
 
-.PHONY: up up-build down logs logs-tor restart ps shell test crawler locust clean runtime openapi openapi-check help _guard-runtime
+.PHONY: up up-build down logs logs-tor restart ps shell test crawler locust clean runtime openapi openapi-check help _guard-runtime _ensure-engine
 
 # Fail fast with guidance when no container backend (or compose runner) is available.
 _guard-runtime:
@@ -91,10 +97,15 @@ _guard-runtime:
 		exit 1; \
 	fi
 
-up: _guard-runtime          ## Start API + Tor containers (extra args via ARGS="...")
+# Start the detected engine when it is not running yet (Apple `container`
+# services, Colima, or Docker Desktop). No-op when it already answers.
+_ensure-engine: _guard-runtime
+	@scripts/ensure-engine.sh "$(RUNTIME_EFFECTIVE)"
+
+up: _ensure-engine           ## Start API + Tor containers (extra args via ARGS="...")
 	$(UP_CMD) $(ARGS)
 
-up-build: _guard-runtime    ## Build and start containers
+up-build: _ensure-engine     ## Build and start containers
 	$(UP_BUILD_CMD)
 
 down: _guard-runtime        ## Stop all containers
