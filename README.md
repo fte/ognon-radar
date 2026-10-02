@@ -397,11 +397,10 @@ server_names_hash_bucket_size 128;
 
 ## 🌐 Live Instances
 
-| Service | URL |
-|---------|-----|
-| API | `http://api.dw.13h.be` |
-| API (Tor) | `http://ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion` |
-| Web client | `http://dw.13h.be` |
+| Service | URL | Onion (Tor) |
+|---------|-----|-------------|
+| API | `http://api.dw.13h.be` | `http://ognonapiw2fminc2gfof2rspipqxm3vqwgmrlprtfvab2fpzmy3viuyd.onion` |
+| Web client | `http://dw.13h.be` | `http://ognonrad6576fe7fwuxiwq6ubjyag2fp25zr7y5yhmiq5xob2qla7oid.onion` |
 
 The web client at `http://dw.13h.be` is a browser-based UI for walking through the API endpoints, launching search jobs, and reading results in real time.
 
