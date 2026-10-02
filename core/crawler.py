@@ -407,7 +407,12 @@ def search_term_in_text(text: str, term: str) -> Tuple[int, str]:
     non-whitespace): a cut neighbour word is retracted out of the window,
     and a word that contains the term ("secret" inside "secretly") is
     shown in full rather than amputated. The term itself is never cut.
+
+    A blank (empty or whitespace-only) term never matches: Python counts it as
+    occurring at every position, which would flag every crawled page as a hit.
     """
+    if not term.strip():
+        return 0, ""
     term_lower = term.lower()
     text_lower = text.lower()
     count = text_lower.count(term_lower)
