@@ -843,7 +843,10 @@ function renderResult(item, thumbMap, term) {
     link.href = torHref(item.url); // ouverture via tor:// géré par le navigateur
   }
 
-  snippet.textContent = item.snippet || "Aucun extrait disponible.";
+  /* Surlignage appliqué aussi au snippet : même sans paragraphes
+     (résultat SERP non encore enrichi, ou page impossible à relire),
+     l'utilisateur voit où le terme apparait dans l'extrait. */
+  snippet.replaceChildren(highlightTermInText(item.snippet || "Aucun extrait disponible.", term));
   footer.textContent = `Occurrences: ${item.term_count ?? "-"} - profondeur: ${item.depth ?? "-"}`;
 
   const paragraphsBlock = renderHighlightedParagraphs(item, term);

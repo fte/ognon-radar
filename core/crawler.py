@@ -751,6 +751,17 @@ class OnionCrawler:
                     count, snippet = search_term_in_text(text, search_term)
                     if not count:
                         no_match_urls.add(current_url)
+                        if current_url in surfaced_urls:
+                            # A SERP row whose target was just crawled and does
+                            # NOT contain the term: the engine may have matched
+                            # any token of a multi-part term (e.g.
+                            # "HC-773-MC"). Downgrade the optimistic
+                            # term_count=1 the row was surfaced with, so the
+                            # client never shows a fake hit. Rows are kept but
+                            # sorted after verified ones (below).
+                            for row in results:
+                                if row['url'] == current_url:
+                                    row['term_count'] = 0
                     if count:
                         paragraphs = extract_matching_paragraphs(soup, search_term)
                         match_cache[current_url] = (count, paragraphs)
@@ -813,6 +824,18 @@ class OnionCrawler:
                 match_cache[result['url']] = (count, paragraphs)
                 result['term_count'] = count
                 result['paragraphs'] = paragraphs
+            else:
+                # Fresh fetch of a SERP target that does not contain the
+                # term: same verdict as the BFS pass. Keep the row (a failed
+                # or absent fetch proves nothing) but zero its count; it will
+                # be sorted after verified rows.
+                result['term_count'] = 0
             time.sleep(settings.crawl_delay)
+
+        # Relevance order: rows where the term was VERIFIED (term_count > 0)
+        # come first, each group in original SERP/BFS order — a token-matched
+        # row (term_count=0) never outranks a page that actually contains the
+        # term.
+        results.sort(key=lambda r: not (r.get('term_count') or 0) > 0)
 
         return results, len(crawled_urls)
