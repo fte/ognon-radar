@@ -430,6 +430,54 @@ class TestOnionCrawler:
         assert verified_row["paragraphs"] == ["the secret keyword truly lives here"]
         assert results[1]["term_count"] == 0
 
+    def test_unverifiable_row_below_verified_with_paragraphs(self, _patch_config):
+        """A failed-fetch row (term_count=1, paragraphs=None) does NOT outrank
+
+        a row whose page could be verified (paragraphs extracted). Live case:
+        a SERP entry on a slow Tor circuit keeps its SERP claim of 1 hit; its
+        unverifiable status must not push it above proven matches.
+        """
+        crawler, tor = self._make_crawler()
+        unverifiable = f"http://{'i' * 56}.onion/v"
+        verified = f"http://{'j' * 56}.onion/v"
+        html = (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + unverifiable + '">First</a></h4>'
+            "<p>loose snippet mentioning secret keyword</p></li>"
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + verified + '">Second</a></h4>'
+            "<p>another loose snippet with secret keyword</p></li>"
+            "</body></html>"
+        )
+        # SERP responses are keyed by URL (BFS drains a set of links). For the
+        # unverifiable target the re-fetch always fails, like a stalled Tor
+        # circuit; the verified one serves a page with the term.
+        def _respond(url, **kwargs):
+            if "juhanurmihxlp" in url:
+                return self._make_response(html)
+            if url == unverifiable:
+                raise RuntimeError("tor stalled")
+            return self._make_response(
+                "<html><head><title>Second target</title></head><body>"
+                "<p>the secret keyword truly lives here</p>"
+                "</body></html>"
+            )
+
+        tor.get_with_retries.side_effect = _respond
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=0,
+            max_pages=5,
+            max_results=5,
+            timeout=10,
+        )
+
+        assert [r["url"] for r in results] == [verified, unverifiable]
+        assert results[0]["paragraphs"] == ["the secret keyword truly lives here"]
+        assert results[1]["term_count"] == 1  # kept as surfaced: unverifiable
+        assert results[1]["paragraphs"] is None
+
     def test_unreachable_serp_target_is_kept(self, _patch_config):
         """A target whose verification fetch FAILS is kept as surfaced.
 
