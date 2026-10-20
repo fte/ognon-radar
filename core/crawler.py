@@ -832,10 +832,23 @@ class OnionCrawler:
                 result['term_count'] = 0
             time.sleep(settings.crawl_delay)
 
-        # Relevance order: rows where the term was VERIFIED (term_count > 0)
-        # come first, each group in original SERP/BFS order — a token-matched
-        # row (term_count=0) never outranks a page that actually contains the
-        # term.
-        results.sort(key=lambda r: not (r.get('term_count') or 0) > 0)
+        # Relevance order (each tier keeps original SERP/BFS order):
+        #   0 — VERIFIED with visible context: paragraphs extracted.
+        #   1 — VERIFIED count without paragraphs, or unverifiable
+        #       (a failed fetch keeps the SERP claim: it may still be a
+        #       real hit that Tor simply could not confirm this run).
+        #   2 — DEBUNKED: the target was fetched and does not contain the
+        #       term (token match by the engine). Demoted, never dropped:
+        #       dropped rows would empty the results on a SERP-heavy seed.
+        def _rank(r: dict) -> int:
+            count = r.get('term_count') or 0
+            has_context = bool(r.get('paragraphs'))
+            if count > 0 and has_context:
+                return 0
+            if count > 0:
+                return 1
+            return 2
+
+        results.sort(key=_rank)
 
         return results, len(crawled_urls)
