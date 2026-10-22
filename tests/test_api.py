@@ -8,6 +8,7 @@ These tests mock the Tor client so they work without a running Tor container.
 """
 import json
 import time
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -320,3 +321,213 @@ class TestJobs:
         self._submit(client)
         resp = client.get("/api/v1/jobs?status=queued", headers=self._HDR)
         assert resp.status_code == 200
+
+
+# ── Permalink + Export (results sharing & CSV/XLS) ─────────────
+
+
+_COMPLETED_SEARCH_RESULT = {
+    "term": "test",
+    "results": [
+        {
+            "url": "http://a.onion/",
+            "title": "A <b>page</b> & co",
+            "snippet": "Les resultats « partagés »",
+            "term_count": 2,
+            "depth": 1,
+            "paragraphs": ["Ligne un", "Ligne deux"],
+        },
+        {
+            "url": "http://b.onion/",
+            "title": "B",
+            "snippet": "extrait",
+            "term_count": 1,
+            "depth": 2,
+        },
+    ],
+    "total": 2,
+    "crawled_pages": 3,
+    "duration_seconds": 1.5,
+    "tor_connected": True,
+    "start_url": "http://x.onion/",
+}
+
+
+class TestJobPermalink:
+    """GET /jobs/{id}/permalink — public read for completed search jobs."""
+
+    @staticmethod
+    def _fresh_id(prefix: str) -> str:
+        # Job ids must be unique ACROSS tests: the job_manager singleton keeps
+        # one sqlite connection for the whole pytest session, and a failed
+        # INSERT (UNIQUE constraint) would poison it ("database is locked")
+        # for every subsequent test.
+        return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+    def _insert_completed_search(self, term="test"):
+        job_id = self._fresh_id("ognse-done-test")
+        result = dict(_COMPLETED_SEARCH_RESULT)
+        result["term"] = term
+        TestJobs._insert_terminal_job(
+            job_id,
+            status="completed",
+            result=result,
+            job_type="search",
+            client_id="owner",
+        )
+        return job_id
+
+    def test_public_read_without_credentials(self, client):
+        job_id = self._insert_completed_search()
+        resp = client.get(f"/api/v1/jobs/{job_id}/permalink")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["job_id"] == job_id
+        assert data["term"] == "test"
+        assert data["status"] == "completed"
+        assert data["total_results"] == 2
+        assert len(data["results"]) == 2
+        assert data["results"][0]["url"] == "http://a.onion/"
+        assert data["summary"]["total"] == 2
+        assert data["summary"]["crawled_pages"] == 3
+
+    def test_pagination(self, client):
+        job_id = self._insert_completed_search()
+        resp = client.get(f"/api/v1/jobs/{job_id}/permalink?offset=1&limit=1")
+        data = resp.json()
+        assert resp.status_code == 200
+        assert data["offset"] == 1 and data["limit"] == 1
+        assert [r["url"] for r in data["results"]] == ["http://b.onion/"]
+
+    def test_non_search_job_is_private(self, client):
+        job_id = self._fresh_id("ognc-capture-done")
+        TestJobs._insert_terminal_job(
+            job_id,
+            status="completed",
+            result={"pages_captured": 3},
+            job_type="capture",
+            client_id="owner",
+        )
+        resp = client.get(f"/api/v1/jobs/{job_id}/permalink")
+        assert resp.status_code == 403
+
+    def test_incomplete_search_is_private(self, client):
+        job_id = self._fresh_id("ognse-queued-test")
+        TestJobs._insert_terminal_job(
+            job_id,
+            status="queued",
+            job_type="search",
+            client_id="owner",
+        )
+        resp = client.get(f"/api/v1/jobs/{job_id}/permalink")
+        assert resp.status_code == 403
+
+    def test_owner_and_admin_still_read_private_jobs(self, client):
+        job_id = self._fresh_id("ognse-queued-test")
+        TestJobs._insert_terminal_job(
+            job_id,
+            status="queued",
+            job_type="search",
+            client_id="owner",
+        )
+        resp = client.get(
+            f"/api/v1/jobs/{job_id}/permalink",
+            headers={"X-Client-ID": "owner"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "queued"
+
+    def test_stranger_cannot_read_private_job(self, client):
+        job_id = self._fresh_id("ognse-queued-test")
+        TestJobs._insert_terminal_job(
+            job_id,
+            status="queued",
+            job_type="search",
+            client_id="owner",
+        )
+        resp = client.get(
+            f"/api/v1/jobs/{job_id}/permalink",
+            headers={"X-Client-ID": "stranger"},
+        )
+        assert resp.status_code == 403
+
+    def test_unknown_job_404(self, client):
+        resp = client.get("/api/v1/jobs/does_not_exist/permalink")
+        assert resp.status_code == 404
+
+
+class TestJobExport:
+    """GET /jobs/{id}/export?format=csv|xls — same read rule as the permalink."""
+
+    _fresh_id = staticmethod(TestJobPermalink._fresh_id)
+
+    def _insert_completed_search(self, term="test"):
+        job_id = self._fresh_id("ognse-done-export")
+        result = dict(_COMPLETED_SEARCH_RESULT)
+        result["term"] = term
+        TestJobs._insert_terminal_job(
+            job_id,
+            status="completed",
+            result=result,
+            job_type="search",
+            client_id="owner",
+        )
+        return job_id
+
+    def test_csv_export(self, client):
+        job_id = self._insert_completed_search()
+        resp = client.get(f"/api/v1/jobs/{job_id}/export?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert resp.headers["result-count"] == "2"
+        assert "attachment" in resp.headers["content-disposition"]
+        assert resp.headers["content-disposition"].endswith('.csv"')
+
+        text = resp.content.decode("utf-8-sig")  # BOM handled
+        lines = text.strip().split("\r\n")
+        assert lines[0] == "#,url,title,snippet,term_count,depth,paragraphs"
+        # Crawl content never breaks the CSV structure (quoted / escaped).
+        assert 'A ""<b>""page"" & co"' not in text
+        assert '"A <b>page</b> & co"' in text or "A <b>page</b> & co" in text
+        assert lines[1].startswith("1,http://a.onion/,")
+        assert 'Ligne un\nLigne deux' in text
+
+    def test_xls_export_spreadsheetml(self, client):
+        job_id = self._insert_completed_search()
+        resp = client.get(f"/api/v1/jobs/{job_id}/export?format=xls")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/vnd.ms-excel")
+        body = resp.content.decode("utf-8")
+        assert body.startswith('<?xml version="1.0"?>')
+        assert 'urn:schemas-microsoft-com:office:spreadsheet' in body
+        assert '<Worksheet ss:Name="Résumé">' in body
+        assert '<Worksheet ss:Name="Résultats">' in body
+        # Untrusted crawl content is XML-escaped inside the sheet.
+        assert "A &lt;b&gt;page&lt;/b&gt; &amp; co" in body
+        assert "http://b.onion/" in body
+
+    def test_export_without_headers_public_read(self, client):
+        job_id = self._insert_completed_search()
+        resp = client.get(f"/api/v1/jobs/{job_id}/export")  # no credentials
+        assert resp.status_code == 200
+
+    def test_invalid_format_422(self, client):
+        job_id = self._insert_completed_search()
+        resp = client.get(f"/api/v1/jobs/{job_id}/export?format=xlsx")
+        assert resp.status_code == 422
+
+    def test_capture_job_cannot_export_409(self, client):
+        job_id = self._fresh_id("ognc-capture-done")
+        TestJobs._insert_terminal_job(
+            job_id,
+            status="completed",
+            result={"pages_captured": 3},
+            job_type="capture",
+            client_id="owner",
+        )
+        resp = client.get(f"/api/v1/jobs/{job_id}/export", headers={"X-Client-ID": "owner"})
+        assert resp.status_code == 409
+
+    def test_unknown_job_404(self, client):
+        resp = client.get("/api/v1/jobs/does_not_exist/export")
+        assert resp.status_code == 404

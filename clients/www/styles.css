@@ -352,6 +352,33 @@ output[data-href]:hover {
   color: var(--spx-magenta);
 }
 
+/* Barre permalien + exports du panneau résultats (masquée tant qu'il n'y a
+   pas de résultats search terminé — app.js pilote l'attribut hidden). */
+.results-share-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.share-permalink {
+  font-family: var(--font-data);
+  font-size: .66rem;
+  color: var(--spx-cyan);
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .results-share-bar {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+
 .panel-title {
   margin: 0;
   font-family: var(--font-stat);

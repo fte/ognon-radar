@@ -6,13 +6,20 @@ import json
 import logging
 from typing import AsyncGenerator, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from core.auth import get_is_admin, require_api_key, require_client_id, require_client_id_sse
+from core.auth import (
+    get_is_admin,
+    require_api_key,
+    require_client_id,
+    require_client_id_sse,
+    _resolve_client_id,
+)
+from core.exporters import export_filename, results_to_csv, results_to_xls
 from core.job_manager import job_manager, JobStatus
 from core.rate_limiter import limiter
-from models.schemas import JobResponse, JobListResponse, JobType
+from models.schemas import JobResponse, JobListResponse, JobType, PermalinkResponse
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +29,32 @@ router = APIRouter(prefix="/api/v1", tags=["jobs"])
 def _check_ownership(job: dict, client_id: str, is_admin: bool) -> None:
     if not is_admin and job["client_id"] != client_id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+
+def _search_results_publicly_readable(job: dict) -> bool:
+    """True when the job is a completed search whose result rows can be read
+    without credentials (permalink / export reuse this rule)."""
+    return (
+        job.get("status") == JobStatus.COMPLETED
+        and job.get("type") == "search"
+        and isinstance(job.get("result"), dict)
+        and isinstance(job["result"].get("results"), list)
+    )
+
+
+def _ensure_read_access(job: dict, x_client_id: Optional[str], x_api_key: Optional[str]) -> None:
+    """Credential-free read for completed search results (shareable permalinks);
+    ownership check otherwise. Kept deliberately next to _check_ownership."""
+    if _search_results_publicly_readable(job):
+        return
+    if not x_client_id and not x_api_key:
+        raise HTTPException(
+            status_code=403,
+            detail="This job's results are not publicly readable — "
+            "send X-Client-ID or X-API-Key",
+        )
+    client_id = _resolve_client_id(x_client_id, x_api_key)
+    _check_ownership(job, client_id, get_is_admin(x_api_key))
 
 
 @router.get("/jobs", response_model=JobListResponse, status_code=200)
@@ -93,6 +126,101 @@ async def get_job(
     if job["status"] == JobStatus.FAILED:
         return JSONResponse(status_code=422, content=response.model_dump())
     return response
+
+
+@router.get(
+    "/jobs/{job_id}/permalink",
+    response_model=PermalinkResponse,
+    status_code=200,
+)
+@limiter.limit("30/minute")
+async def get_job_permalink(
+    request: Request,
+    job_id: str,
+    x_client_id: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+    offset: int = Query(0, ge=0, description="Result offset for pagination"),
+    limit: int = Query(20, ge=1, le=200, description="Max results to return"),
+) -> PermalinkResponse:
+    """Shareable read-only view of a job's results.
+
+    Uses the human-readable job id as the permalink key. The results of a
+    **completed search** job are public on purpose — a permalink must be
+    openable outside the owner's browser. Everything else (queued jobs,
+    captures, screenshots, failed jobs) still requires ownership, via the
+    same X-Client-ID / X-API-Key headers as GET /jobs/{job_id}.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    _ensure_read_access(job, x_client_id, x_api_key)
+
+    all_results = (job.get("result") or {}).get("results", []) or []
+    term = (job.get("request") or {}).get("term", "")
+    return PermalinkResponse(
+        job_id=job["id"],
+        term=term if job.get("status") == JobStatus.COMPLETED else "",
+        status=job["status"],
+        created_at=job.get("created_at"),
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
+        summary={
+            "total": (job.get("result") or {}).get("total", len(all_results)),
+            "crawled_pages": (job.get("result") or {}).get("crawled_pages", 0),
+            "duration_seconds": (job.get("result") or {}).get("duration_seconds"),
+        },
+        results=all_results[offset: offset + limit],
+        offset=offset,
+        limit=limit,
+        total_results=len(all_results),
+    )
+
+
+@router.get("/jobs/{job_id}/export")
+@limiter.limit("30/minute")
+async def export_job_results(
+    request: Request,
+    job_id: str,
+    x_client_id: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+    format: str = Query("csv", pattern="^(csv|xls)$", description="Export format: csv or xls"),
+) -> Response:
+    """Export all results of a completed search job as CSV or SpreadsheetML .xls.
+
+    Same read rule as the permalink: public for completed search results,
+    ownership-checked otherwise — the export buttons must work from a shared
+    permalink too. Exports are unpaginated (the full result list).
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    _ensure_read_access(job, x_client_id, x_api_key)
+    if not _search_results_publicly_readable(job):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job {job_id} is {job['status']} ({job.get('type')}) — "
+            "only completed search jobs have results to export",
+        )
+
+    term = (job.get("request") or {}).get("term", "")
+    filename = export_filename(job_id, str(term), format)
+    if format == "xls":
+        content = results_to_xls(job).encode("utf-8")
+        media_type = "application/vnd.ms-excel"
+    else:
+        content = results_to_csv(job["result"]["results"]).encode("utf-8")
+        media_type = "text/csv; charset=utf-8"
+
+    caller = x_api_key if x_api_key else (x_client_id or "anonymous")
+    logger.info(f"Export job {job_id} as {format} ({len(content)} bytes, client '{caller}')")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Result-Count": str(len(job["result"]["results"])),
+        },
+    )
 
 
 @router.get("/jobs/{job_id}/stream")

@@ -165,6 +165,27 @@ class JobListResponse(BaseModel):
     offset: int = Field(0)
 
 
+class PermalinkResponse(BaseModel):
+    """Shareable read-only view of a completed search job, returned by
+    GET /jobs/{id}/permalink. Search results are intentionally public once
+    the job completed (see the jobs routes for the rationale)."""
+
+    job_id: str = Field(..., description="Human-readable job identifier")
+    term: str = Field("", description="Search term of the original request")
+    status: str = Field(...)
+    created_at: Optional[str] = Field(None)
+    started_at: Optional[str] = Field(None)
+    completed_at: Optional[str] = Field(None)
+    summary: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Aggregates: total, crawled_pages, duration_seconds",
+    )
+    results: List[Dict[str, Any]] = Field(default_factory=list)
+    offset: int = Field(0)
+    limit: int = Field(20)
+    total_results: int = Field(0)
+
+
 # ── Capture models ───────────────────────────────────────────────────
 
 
