@@ -333,3 +333,55 @@ Each attempt is traced in the panel with the reason and the retry counter, e.g.
 `SSE … error · flux fermé · hors ligne · retry 3/6 dans 8s`. A `NET` line is
 logged on `online`/`offline` transitions, which pinpoints a network handover.
 
+
+## 12) Troubleshooting — 502 everywhere after a Debian release upgrade
+
+Symptom: nginx answers `502 Bad Gateway` on the clear FQDN **and** on the
+`.onion` (both paths terminate upstream: `HiddenServicePort 80 127.0.0.1:8000`
+for the API, `127.0.0.1:80` for the site), so the backend is what died — not
+nginx, not TLS, not Tor.
+
+Cause: the venv is created with a bare `python3` symlink, so a release upgrade
+that bumps `/usr/bin/python3` (Debian 12 → 13 moved 3.11 → 3.13) silently
+orphanates the venv's `site-packages`. `python` still runs, but with the wrong
+`sys.path`:
+
+```bash
+# On the VPS
+journalctl -u ognon-radar-api.service -n 5 --no-pager
+#   .../.venv/bin/python: No module named uvicorn   <- signature of the mismatch
+
+APP_DIR/.venv/bin/python -V                       # host version (3.13.x)
+grep '^version' APP_DIR/.venv/pyvenv.cfg          # venv version (3.11.x)
+ls APP_DIR/.venv/lib                              # stale: python3.11
+```
+
+Fix (no sudo needed — the unit has `Restart=always`/`RestartSec=5`, so it
+picks the repaired venv up on its next restart):
+
+```bash
+cd "$APP_DIR"
+rm -rf .venv
+python3 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements.txt
+APP_CONFIG_PATH="$APP_DIR/config.live.yaml" ./.venv/bin/python -c 'import main; print("import OK")'
+
+# Wait <=5s, then:
+systemctl --no-pager --full status ognon-radar-api.service
+curl -fsS http://127.0.0.1:8000/api/v1/health
+```
+
+Then verify both entry points, and re-check Playwright (the distro upgrade can
+change browser system libraries — the t64 transition, see §10):
+
+```bash
+curl -fsS "https://<API_FQDN>/api/v1/health"
+curl -fsS --socks5-hostname 127.0.0.1:9050 http://<API_ONION>/api/v1/health
+APP_DIR/.venv/bin/python scripts/check_playwright.py --verbose
+```
+
+Self-healing: `scripts/deploy_live.sh` now compares `pyvenv.cfg`'s recorded
+version against the host `python3` and recreates the venv on mismatch, so the
+next deploy after an OS upgrade repairs this automatically instead of failing
+at `pip install` (`No module named pip`).

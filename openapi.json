@@ -501,6 +501,194 @@
         }
       }
     },
+    "/api/v1/jobs/{job_id}/permalink": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Job Permalink",
+        "description": "Shareable read-only view of a job's results.\n\nUses the human-readable job id as the permalink key. The results of a\n**completed search** job are public on purpose — a permalink must be\nopenable outside the owner's browser. Everything else (queued jobs,\ncaptures, screenshots, failed jobs) still requires ownership, via the\nsame X-Client-ID / X-API-Key headers as GET /jobs/{job_id}.",
+        "operationId": "get_job_permalink_api_v1_jobs__job_id__permalink_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Result offset for pagination",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Result offset for pagination"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Max results to return",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Max results to return"
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermalinkResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{job_id}/export": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Export Job Results",
+        "description": "Export all results of a completed search job as CSV or SpreadsheetML .xls.\n\nSame read rule as the permalink: public for completed search results,\nownership-checked otherwise — the export buttons must work from a shared\npermalink too. Exports are unpaginated (the full result list).",
+        "operationId": "export_job_results_api_v1_jobs__job_id__export_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(csv|xls)$",
+              "description": "Export format: csv or xls",
+              "default": "csv",
+              "title": "Format"
+            },
+            "description": "Export format: csv or xls"
+          },
+          {
+            "name": "x-client-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Client-Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{job_id}/stream": {
       "get": {
         "tags": [
@@ -1866,6 +2054,94 @@
           "screenshot"
         ],
         "title": "JobType"
+      },
+      "PermalinkResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id",
+            "description": "Human-readable job identifier"
+          },
+          "term": {
+            "type": "string",
+            "title": "Term",
+            "description": "Search term of the original request",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Summary",
+            "description": "Aggregates: total, crawled_pages, duration_seconds"
+          },
+          "results": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "default": 20
+          },
+          "total_results": {
+            "type": "integer",
+            "title": "Total Results",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "PermalinkResponse",
+        "description": "Shareable read-only view of a completed search job, returned by\nGET /jobs/{id}/permalink. Search results are intentionally public once\nthe job completed (see the jobs routes for the rationale)."
       },
       "ScreenshotRequest": {
         "properties": {

@@ -70,6 +70,22 @@ const endpoints = [
     mode: "example",
   },
   {
+    key: "permalink",
+    method: "GET",
+    path: "/api/v1/jobs/{job_id}/permalink",
+    title: "Permalien",
+    description: "Vue partageable des resultats d'un job search termine (lecture publique).",
+    mode: "example",
+  },
+  {
+    key: "export",
+    method: "GET",
+    path: "/api/v1/jobs/{job_id}/export?format=csv|xls",
+    title: "Exporter",
+    description: "Telecharge les resultats en CSV ou XLS (SpreadsheetML, sans dependance).",
+    mode: "example",
+  },
+  {
     key: "webhooks",
     method: "PUT/GET",
     path: "/api/v1/webhooks/config",
@@ -130,6 +146,7 @@ const jobCompleted = document.querySelector("#job-completed");
 const summary = document.querySelector("#summary");
 const results = document.querySelector("#results");
 const pollLog = document.querySelector("#poll-log");
+const resultsShare = document.querySelector("#results-share");
 
 let searchEs = null;
 let searchPolls = new Map(); // job_id → handle setInterval du repli REST
@@ -415,7 +432,7 @@ async function streamSearchJob(id) {
         setEndpointState("job", "done");
         setStatus("Job termine. Resultats charges.", "completed");
         setMeterState("completed");
-        renderResults(job.result, job.request?.term);
+        renderResults(job.result, job.request?.term, job.id);
         return;
       }
 
@@ -469,12 +486,12 @@ function pollSearchJob(id) {
       if (job.status === "completed") {
         stop();
         setBusy(false);
-        setEndpointState("job", "done");
-        setStatus("Job termine. Resultats charges.", "completed");
+        setEndpointState("job", "done");        setStatus("Job termine. Resultats charges.", "completed");
         setMeterState("completed");
-        renderResults(job.result, job.request?.term);
+        renderResults(job.result, job.request?.term, job.id || id);
         return;
       }
+
       if (job.status === "failed" || job.status === "cancelled") {
         stop();
         setBusy(false);
@@ -656,6 +673,7 @@ function resetScenario() {
   pollLog.replaceChildren();
   summary.textContent = "Les resultats apparaitront quand le job sera termine.";
   results.replaceChildren();
+  if (resultsShare) { resultsShare.hidden = true; resultsShare.replaceChildren(); }
   setMeterState("queued");
 }
 
@@ -734,9 +752,10 @@ function formatDate(value) {
 /* term = terme du job rendu (job.request.term), scopé à ce rendu : pas d'état
    global, donc un ancien job qui se termine surligne avec SON terme, même si
    une nouvelle recherche a démarré entre-temps. */
-function renderResults(result, term = "") {
+function renderResults(result, term = "", jobId = null) {
   // Capture job
   if (result?.download_url) {
+    hideResultsShare();
     const url = `${API_BASE_URL}${result.download_url}`;
     const pages = result.pages_captured ?? "-";
     const size = result.size_bytes ? `${(result.size_bytes / 1024).toFixed(0)} Ko` : "-";
@@ -759,6 +778,12 @@ function renderResults(result, term = "") {
 
   summary.textContent = `${total} resultat(s), ${pages} page(s) lue(s), duree ${duration}.`;
 
+  if (jobId && items.length > 0) {
+    showResultsShare(jobId);
+  } else {
+    hideResultsShare();
+  }
+
   const thumbMap = new Map(); // url → <img> element
   results.replaceChildren(...items.map(item => renderResult(item, thumbMap, term)));
 
@@ -772,6 +797,52 @@ function renderResults(result, term = "") {
       submitAndPollScreenshot(url, imgEl);
     }
   }
+}
+
+/* ───── Permalien + exports ─────
+   Le permalien reutilise le job id human readable affiche dans le panneau
+   XHR (?job=ognse-dark-raven-…). Les resultats d'un job search termine sont
+   lus publiquement par /permalink et /export : le lien est partageable tel
+  quel, sans client-id ni cle API. */
+
+function showResultsShare(searchJobId) {
+  if (!resultsShare) return;
+  const permalinkPath = `?job=${encodeURIComponent(searchJobId)}`;
+  const permalinkUrl = `${location.origin}${location.pathname}${permalinkPath}`;
+
+  const permalink = document.createElement("output");
+  permalink.className = "share-permalink";
+  permalink.value = permalinkPath;
+  permalink.title = permalinkUrl;
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "btn-chip";
+  copyBtn.textContent = "Copier le permalien";
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(permalinkUrl).then(() => {
+      copyBtn.textContent = "Copie ✓";
+      setTimeout(() => (copyBtn.textContent = "Copier le permalien"), 1600);
+    }).catch(() => {}); // presse-papiers indisponible : le lien reste visible
+  });
+
+  const exportLink = (format, label) => {
+    const a = document.createElement("a");
+    a.className = "btn-chip";
+    a.href = `${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(searchJobId)}/export?format=${format}`;
+    a.download = "";
+    a.textContent = label;
+    return a;
+  };
+
+  resultsShare.hidden = false;
+  resultsShare.replaceChildren(permalink, copyBtn, exportLink("csv", "Export CSV"), exportLink("xls", "Export XLS"));
+}
+
+function hideResultsShare() {
+  if (!resultsShare) return;
+  resultsShare.hidden = true;
+  resultsShare.replaceChildren();
 }
 
 /* ───── Surlignage des paragraphes ─────
@@ -843,7 +914,10 @@ function renderResult(item, thumbMap, term) {
     link.href = torHref(item.url); // ouverture via tor:// géré par le navigateur
   }
 
-  snippet.textContent = item.snippet || "Aucun extrait disponible.";
+  /* Surlignage appliqué aussi au snippet : même sans paragraphes
+     (résultat SERP non encore enrichi, ou page impossible à relire),
+     l'utilisateur voit où le terme apparait dans l'extrait. */
+  snippet.replaceChildren(highlightTermInText(item.snippet || "Aucun extrait disponible.", term));
   footer.textContent = `Occurrences: ${item.term_count ?? "-"} - profondeur: ${item.depth ?? "-"}`;
 
   const paragraphsBlock = renderHighlightedParagraphs(item, term);
@@ -1130,20 +1204,17 @@ function torHref(url) {
     window.addEventListener("load", () => {
       (async () => {
         try {
-          const r = await fetch(`${API_BASE_URL}/api/v1/jobs/${encodeURIComponent(jobId)}`, {
-            headers: getClientHeaders(),
-          });
-          const job = await r.json();
-          if (!r.ok || !job) throw new Error(job?.error || `HTTP ${r.status}`);
-          document.getElementById("job-id").textContent = job.id || jobId;
-          document.getElementById("job-status").textContent = statusLabel(job.status);
-          document.getElementById("job-started").textContent = formatDate(job.started_at);
-          document.getElementById("job-completed").textContent = formatDate(job.completed_at);
-          if (job.status === "completed" && job.result) {
-            setStatus(statusLabel(job.status), "done");
-            renderResults(job.result, job.request?.term);
+          const share = await fetchShareableJob(jobId);
+          document.getElementById("job-id").textContent = share.name;
+          document.getElementById("job-id").title = share.name;
+          document.getElementById("job-status").textContent = statusLabel(share.status);
+          document.getElementById("job-started").textContent = formatDate(share.started_at);
+          document.getElementById("job-completed").textContent = formatDate(share.completed_at);
+          if (share.status === "completed" && share.results) {
+            setStatus(statusLabel(share.status), "done");
+            renderResults(share.results, share.term, share.name);
           } else {
-            setStatus(statusLabel(job.status), job.status === "failed" ? "failed" : "running");
+            setStatus(statusLabel(share.status), share.status === "failed" ? "failed" : "running");
           }
         } catch (e) {
           setStatus(`Job introuvable : ${e.message}`, "failed");
@@ -1152,3 +1223,40 @@ function torHref(url) {
     });
   }
 })();
+
+/* job=<id> : lecture publique d'abord (/permalink, partageable sans
+   credential), puis repli authentifie GET /jobs/{id} (meme contrat). */
+async function fetchShareableJob(jobIdParam) {
+  const enc = encodeURIComponent(jobIdParam);
+  let r = await fetch(`${API_BASE_URL}/api/v1/jobs/${enc}/permalink`);
+  if (r.ok) {
+    const p = await r.json();
+    const summary = p.summary || {};
+    return {
+      name: p.job_id || jobIdParam,
+      status: p.status,
+      started_at: p.started_at || p.created_at,
+      completed_at: p.completed_at,
+      term: p.term,
+      results: (p.results || []).length
+        ? {
+            results: p.results,
+            total: summary.total,
+            crawled_pages: summary.crawled_pages,
+            duration_seconds: summary.duration_seconds,
+          }
+        : null,
+    };
+  }
+  r = await fetch(`${API_BASE_URL}/api/v1/jobs/${enc}`, { headers: getClientHeaders() });
+  const job = await r.json();
+  if (!r.ok || !job) throw new Error(job?.error || `HTTP ${r.status}`);
+  return {
+    name: job.id || jobIdParam,
+    status: job.status,
+    started_at: job.started_at,
+    completed_at: job.completed_at,
+    term: job.request?.term,
+    results: job.status === "completed" ? job.result : null,
+  };
+}

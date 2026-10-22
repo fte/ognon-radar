@@ -751,6 +751,17 @@ class OnionCrawler:
                     count, snippet = search_term_in_text(text, search_term)
                     if not count:
                         no_match_urls.add(current_url)
+                        if current_url in surfaced_urls:
+                            # A SERP row whose target was just crawled and does
+                            # NOT contain the term: the engine may have matched
+                            # any token of a multi-part term (e.g.
+                            # "HC-773-MC"). Downgrade the optimistic
+                            # term_count=1 the row was surfaced with, so the
+                            # client never shows a fake hit. Rows are kept but
+                            # sorted after verified ones (below).
+                            for row in results:
+                                if row['url'] == current_url:
+                                    row['term_count'] = 0
                     if count:
                         paragraphs = extract_matching_paragraphs(soup, search_term)
                         match_cache[current_url] = (count, paragraphs)
@@ -813,6 +824,31 @@ class OnionCrawler:
                 match_cache[result['url']] = (count, paragraphs)
                 result['term_count'] = count
                 result['paragraphs'] = paragraphs
+            else:
+                # Fresh fetch of a SERP target that does not contain the
+                # term: same verdict as the BFS pass. Keep the row (a failed
+                # or absent fetch proves nothing) but zero its count; it will
+                # be sorted after verified rows.
+                result['term_count'] = 0
             time.sleep(settings.crawl_delay)
+
+        # Relevance order (each tier keeps original SERP/BFS order):
+        #   0 — VERIFIED with visible context: paragraphs extracted.
+        #   1 — VERIFIED count without paragraphs, or unverifiable
+        #       (a failed fetch keeps the SERP claim: it may still be a
+        #       real hit that Tor simply could not confirm this run).
+        #   2 — DEBUNKED: the target was fetched and does not contain the
+        #       term (token match by the engine). Demoted, never dropped:
+        #       dropped rows would empty the results on a SERP-heavy seed.
+        def _rank(r: dict) -> int:
+            count = r.get('term_count') or 0
+            has_context = bool(r.get('paragraphs'))
+            if count > 0 and has_context:
+                return 0
+            if count > 0:
+                return 1
+            return 2
+
+        results.sort(key=_rank)
 
         return results, len(crawled_urls)

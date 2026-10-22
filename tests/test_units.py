@@ -314,6 +314,198 @@ class TestOnionCrawler:
         # second Tor round-trip (neither probing, surfacing, nor enrichment).
         assert tor.get_with_retries.call_count == 2
 
+    def _serp_one_entry(self, target: str, snippet: str) -> str:
+        return (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + target + '">Result</a></h4>'
+            f"<p>{snippet}</p></li>"
+            "</body></html>"
+        )
+
+    def _no_term_page(self, title: str, text: str) -> str:
+        return f"<html><head><title>{title}</title></head><body>{text}</body></html>"
+
+    def test_serp_row_downgraded_when_bfs_target_lacks_term(self, _patch_config):
+        """SERP entry whose BFS-crawled target lacks the term shows 0 occurrences.
+
+        The engine may surface a page without the exact term (tokenized
+        matching); keeping term_count=1 would display a fake "Occurrences: 1"
+        with no paragraph highlighting.
+        """
+        crawler, tor = self._make_crawler()
+        target = f"http://{'d' * 56}.onion/page"
+        # Call 1 = the SERP page; call 2 = the target, crawled by the BFS,
+        # which contains no occurrence of the term.
+        tor.get_with_retries.side_effect = [
+            self._make_response(self._serp_one_entry(target, "a snippet mentioning secret keyword")),
+            self._make_response(self._no_term_page("Target", "nothing relevant on this page")),
+        ]
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=3,
+            timeout=10,
+        )
+
+        assert len(results) == 1
+        assert results[0]["url"] == target
+        # Downgraded: the crawler PROVED the page does not contain the term.
+        assert results[0]["term_count"] == 0
+        assert results[0]["paragraphs"] is None
+        # SERP page + BFS crawl of the target; the enrichment pass skips the
+        # already-crawled target (no third fetch).
+        assert tor.get_with_retries.call_count == 2
+
+    def test_serp_row_downgraded_when_enrichment_lacks_term(self, _patch_config):
+        """SERP entry whose enrichment fetch shows no occurrence is downgraded.
+
+        With max_depth=0 the target is never crawled by the BFS, so the row is
+        only verified by the enrichment pass.
+        """
+        crawler, tor = self._make_crawler()
+        target = f"http://{'e' * 56}.onion/page"
+        tor.get_with_retries.side_effect = [
+            self._make_response(self._serp_one_entry(target, "a snippet mentioning secret keyword")),
+            self._make_response(self._no_term_page("Target", "still nothing relevant here")),
+        ]
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=0,
+            max_pages=5,
+            max_results=3,
+            timeout=10,
+        )
+
+        assert len(results) == 1
+        assert results[0]["term_count"] == 0
+        assert results[0]["paragraphs"] is None
+        assert tor.get_with_retries.call_count == 2
+
+    def test_verified_matches_rank_before_unverified(self, _patch_config):
+        """A page proven to contain the term outranks a token-matched SERP row.
+
+        The engine lists [unverified target, verified target]; the final order
+        puts the verified one first while pages that merely match a token of
+        the term (term_count=0) are demoted after.
+        """
+        crawler, tor = self._make_crawler()
+        unverified = f"http://{'g' * 56}.onion/a"
+        verified = f"http://{'h' * 56}.onion/b"
+        html = (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + unverified + '">First</a></h4>'
+            "<p>loose snippet mentioning secret keyword</p></li>"
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + verified + '">Second</a></h4>'
+            "<p>another loose snippet with secret keyword</p></li>"
+            "</body></html>"
+        )
+        # Answers keyed by URL: the BFS drains a set of links, so its fetch
+        # order is not deterministic — map pages to their target instead.
+        hit_page = self._make_response(
+            "<html><head><title>Second target</title></head><body>"
+            "<p>the secret keyword truly lives here</p>"
+            "</body></html>"
+        )
+        miss_page = self._make_response(self._no_term_page("First target", "no term here either"))
+        tor.get_with_retries.side_effect = lambda url, **kw: self._make_response(html) \
+            if "juhanurmihxlp" in url else (hit_page if url == verified else miss_page)
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=1,
+            max_pages=5,
+            max_results=5,
+            timeout=10,
+        )
+
+        assert [r["url"] for r in results] == [verified, unverified]
+        verified_row = results[0]
+        assert verified_row["term_count"] > 0
+        assert verified_row["paragraphs"] == ["the secret keyword truly lives here"]
+        assert results[1]["term_count"] == 0
+
+    def test_unverifiable_row_below_verified_with_paragraphs(self, _patch_config):
+        """A failed-fetch row (term_count=1, paragraphs=None) does NOT outrank
+
+        a row whose page could be verified (paragraphs extracted). Live case:
+        a SERP entry on a slow Tor circuit keeps its SERP claim of 1 hit; its
+        unverifiable status must not push it above proven matches.
+        """
+        crawler, tor = self._make_crawler()
+        unverifiable = f"http://{'i' * 56}.onion/v"
+        verified = f"http://{'j' * 56}.onion/v"
+        html = (
+            '<html><head><title>SERP</title></head><body>'
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + unverifiable + '">First</a></h4>'
+            "<p>loose snippet mentioning secret keyword</p></li>"
+            '<li><h4><a href="/search/redirect?search_term=x&redirect_url=' + verified + '">Second</a></h4>'
+            "<p>another loose snippet with secret keyword</p></li>"
+            "</body></html>"
+        )
+        # SERP responses are keyed by URL (BFS drains a set of links). For the
+        # unverifiable target the re-fetch always fails, like a stalled Tor
+        # circuit; the verified one serves a page with the term.
+        def _respond(url, **kwargs):
+            if "juhanurmihxlp" in url:
+                return self._make_response(html)
+            if url == unverifiable:
+                raise RuntimeError("tor stalled")
+            return self._make_response(
+                "<html><head><title>Second target</title></head><body>"
+                "<p>the secret keyword truly lives here</p>"
+                "</body></html>"
+            )
+
+        tor.get_with_retries.side_effect = _respond
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=0,
+            max_pages=5,
+            max_results=5,
+            timeout=10,
+        )
+
+        assert [r["url"] for r in results] == [verified, unverifiable]
+        assert results[0]["paragraphs"] == ["the secret keyword truly lives here"]
+        assert results[1]["term_count"] == 1  # kept as surfaced: unverifiable
+        assert results[1]["paragraphs"] is None
+
+    def test_unreachable_serp_target_is_kept(self, _patch_config):
+        """A target whose verification fetch FAILS is kept as surfaced.
+
+        A failed Tor fetch proves nothing; demoting it would misleadingly
+        group it with token-matched pages (same policy as the reachability
+        probing: an expired budget says nothing about the target).
+        """
+        crawler, tor = self._make_crawler()
+        target = f"http://{'f' * 56}.onion/page"
+        tor.get_with_retries.side_effect = [
+            self._make_response(self._serp_one_entry(target, "a snippet mentioning secret keyword")),
+            MagicMock(side_effect=RuntimeError("tor down")),
+        ]
+
+        results, _ = crawler.crawl_and_search(
+            start_url="http://juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion/search/?q=test",
+            search_term="secret keyword",
+            max_depth=0,
+            max_pages=5,
+            max_results=3,
+            timeout=10,
+        )
+
+        assert len(results) == 1
+        assert results[0]["url"] == target
+        assert results[0]["term_count"] == 1  # untouched: unverifiable, not debunked
+        assert results[0]["paragraphs"] is None
+
 
 # ── search_term_in_text (snippet citation) ────────────────────────────
 

@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 
@@ -73,3 +74,4 @@ ognon-jobs/*
 AGENTS.md
 CLAUDE.md
 todo.md
+.docs/

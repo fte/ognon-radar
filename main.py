@@ -156,6 +156,8 @@ async def root(request: Request):
             "search": "POST /api/v1/search",
             "jobs": "GET /api/v1/jobs",
             "job_detail": "GET /api/v1/jobs/{job_id}",
+            "job_permalink": "GET /api/v1/jobs/{job_id}/permalink",
+            "job_export": "GET /api/v1/jobs/{job_id}/export?format=csv|xls",
             "health": "GET /api/v1/health",
             "capture": "POST /api/v1/capture",
             "capture_download": "GET /api/v1/captures/{job_id}/download",

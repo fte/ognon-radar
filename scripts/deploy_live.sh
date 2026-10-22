@@ -62,7 +62,24 @@ sed -i "s|styles.css?v=dev|styles.css?v=$SHORT|" "$APP_DIR/clients/www/index.htm
 sed -i "s|app.js?v=dev|app.js?v=$SHORT|" "$APP_DIR/clients/www/index.html"
 
 echo "[deploy] Ensuring Python virtual environment"
+venv_recreate=0
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  venv_recreate=1
+elif [[ -f "$VENV_DIR/pyvenv.cfg" ]]; then
+  # A Debian release upgrade switches /usr/bin/python3 (e.g. 3.11 -> 3.13)
+  # while the venv keeps pointing at the old site-packages: python still
+  # runs, but no module resolves ("No module named uvicorn"), so the unit
+  # crash-loops and nginx answers 502 on every entry point (clearnet +
+  # onion). Recreate the venv when the recorded version no longer matches.
+  venv_version="$(sed -n 's/^version = *//p' "$VENV_DIR/pyvenv.cfg" | head -n1 | tr -d '[:space:]')"
+  host_version="$(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null || true)"
+  if [[ -n "$venv_version" && "$venv_version" != "$host_version" ]]; then
+    echo "[deploy] venv Python $venv_version != host python3 $host_version: recreating virtualenv"
+    venv_recreate=1
+  fi
+fi
+if [[ "$venv_recreate" -eq 1 ]]; then
+  rm -rf "$VENV_DIR"
   python3 -m venv "$VENV_DIR"
 fi
 
