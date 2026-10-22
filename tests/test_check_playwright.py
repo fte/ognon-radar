@@ -55,7 +55,14 @@ FFmpeg (playwright ffmpeg v1011)
 """
 
 
-@pytest.mark.parametrize("driver_output", [OLD_STYLE_OUTPUT, CURRENT_STYLE_OUTPUT])
+@pytest.mark.parametrize(
+    "driver_output",
+    [OLD_STYLE_OUTPUT, CURRENT_STYLE_OUTPUT],
+    # ids explicites : sinon pytest stringifie les sorties multi-lignes
+    # (chemins, URLs de téléchargement…) dans le nom du test, en polluant la
+    # sortie pytest -v.
+    ids=["old-style-driver-output", "current-style-driver-output"],
+)
 def test_query_extracts_only_chromium_directories(driver_output):
     directories = _run_result(driver_output)
     assert [d.name for d in directories] == [
