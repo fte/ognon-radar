@@ -308,6 +308,18 @@ month, 03:00 UTC):
   held back by the biweekly cadence.
 - Merging the `deps → main` PR deploys to the live instance automatically
   (existing `deploy-live` behavior).
+- **Required repository settings:**
+  - *Settings → Actions → General → Workflow permissions → "Allow GitHub
+    Actions to create and approve pull requests"* must be **enabled**,
+    otherwise the workflow cannot open the `deps → main` PR.
+  - The **`DEPS_TOKEN`** secret must hold a token allowed to write workflow
+    files (a fine-grained PAT with *"Workflows: write"*, or a classic PAT
+    with the `workflow` scope). `GITHUB_TOKEN` can never be granted that
+    permission — its `permissions:` block has no `workflows` key — so any
+    push or merge touching `.github/workflows/**` is refused. Without this
+    secret the train still works, but it stops as soon as a workflow file
+    has to be written (e.g. when `main` updates one, or when a
+    Dependabot bump targets a GitHub Action version).
 
 ## 🔮 Roadmap
 
