@@ -18,6 +18,16 @@
 #      closed automatically on the next fully green run.
 #
 # Can also be triggered manually from the Actions tab (workflow_dispatch).
+#
+# Required secret:
+#   DEPS_TOKEN — a token allowed to write workflow files (a fine-grained PAT
+#   with "Workflows: write", or a classic PAT with the `workflow` scope).
+#   GITHUB_TOKEN can never be granted that permission: it has no `workflows`
+#   key in its `permissions:` block, so any push or merge touching
+#   `.github/workflows/**` is refused ("refusing to allow a GitHub App to
+#   create or update workflow ... without `workflows` permission"). The
+#   workflow falls back to GITHUB_TOKEN when the secret is missing, which is
+#   enough as long as no workflow file has to be written.
 name: Dependencies — auto-merge
 
 on:
@@ -32,9 +42,6 @@ permissions:
   issues: write
   # Needed to dispatch deploy-live.yml and to list its runs.
   actions: write
-  # Needed to push the `.github/workflows/` files that the `deps` branch
-  # inherits from main (a GitHub App is refused without this scope).
-  workflows: write
 
 concurrency:
   group: deps-auto-merge
@@ -45,14 +52,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.DEPS_TOKEN || github.token }}
       BRANCH: deps
       LABEL: dependencies-merge-blocked
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
+          # The token must be able to write workflow files: see the header.
+          token: ${{ secrets.DEPS_TOKEN || github.token }}
           # Full history: the workflow merges `main` into `deps` and compares
           # both branches by ancestry.
           fetch-depth: 0
@@ -113,7 +122,13 @@ jobs:
             echo "::warning::main won the conflicting hunks — a dependency bump may have been dropped (Dependabot re-proposes it on the next batch)."
           fi
 
-          git push origin "$BRANCH"
+          if ! push_out=$(git push origin "$BRANCH" 2>&1); then
+            echo "$push_out"
+            if grep -q "workflows\` permission" <<< "$push_out"; then
+              echo "::error::The DEPS_TOKEN secret is missing or lacks the 'workflows' permission: the sync had to update .github/workflows/ files."
+            fi
+            exit 1
+          fi
 
       - name: Merge green Dependabot PRs into `deps`
         id: merge
@@ -225,10 +240,15 @@ jobs:
             fi
 
             echo "All checks green — squash-merging."
-            if gh pr merge "$num" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+            if merge_out=$(gh pr merge "$num" --repo "$GITHUB_REPOSITORY" --squash --delete-branch 2>&1); then
               merged_any="true"
             else
-              blocked="${blocked}- PR #${num} (${title}): merge command failed (see workflow logs). ${url}"$'\n'
+              echo "$merge_out"
+              if grep -q "workflows\` permission" <<< "$merge_out"; then
+                blocked="${blocked}- PR #${num} (${title}): the merge was refused because the token cannot write workflow files — the DEPS_TOKEN secret is missing or lacks the 'workflows' permission. ${url}"$'\n'
+              else
+                blocked="${blocked}- PR #${num} (${title}): merge command failed (see workflow logs). ${url}"$'\n'
+              fi
             fi
             echo "::endgroup::"
           done
@@ -321,7 +341,13 @@ jobs:
             echo "No checks reported on the promotion PR — the test suite already passed on the identical deps head."
           fi
 
-          gh pr merge "$pr_num" --repo "$GITHUB_REPOSITORY" --squash
+          if ! merge_out=$(gh pr merge "$pr_num" --repo "$GITHUB_REPOSITORY" --squash 2>&1); then
+            echo "$merge_out"
+            if grep -q "workflows\` permission" <<< "$merge_out"; then
+              echo "::error::The promotion PR touches .github/workflows/ files: the DEPS_TOKEN secret is missing or lacks the 'workflows' permission."
+            fi
+            exit 1
+          fi
 
       - name: Deploy `main` (a GITHUB_TOKEN merge does not trigger workflows)
         id: deploy
@@ -382,7 +408,7 @@ jobs:
           elif [ "$SYNC_OUTCOME" = "failure" ]; then
             reason="the ${BRANCH} branch could not be synced with main"
           elif [ "$PROMOTE_OUTCOME" = "failure" ]; then
-            reason="the promotion PR could not be created or merged — creating a PR with GITHUB_TOKEN requires the repository setting \"Allow GitHub Actions to create and approve pull requests\" to be enabled (Settings > Actions > General > Workflow permissions)"
+            reason="the promotion PR could not be created or merged — if it touches .github/workflows/ files, the DEPS_TOKEN secret must be set with the 'workflows' permission (GITHUB_TOKEN can never be granted it)"
           elif [ "$DEPLOY_OUTCOME" = "failure" ]; then
             reason="the deployment of main could not be dispatched"
           elif [ "$BLOCKED" = "none" ] || [ -z "$BLOCKED" ]; then
