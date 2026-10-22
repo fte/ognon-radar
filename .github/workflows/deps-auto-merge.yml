@@ -2,15 +2,20 @@
 #
 # Runs the day after each Dependabot batch (see .github/dependabot.yml):
 #   1. Creates the `deps` branch from `main` if it does not exist.
-#   2. Squash-merges every green Dependabot PR whose base is `deps`.
-#   3. If anything was merged, runs the real test suite on the updated
-#      `deps` head (same commands as ci-tests.yml).
-#   4. If tests pass, opens/updates a PR `deps -> main` and squash-merges it.
+#   2. Syncs `deps` with `main` (merge main -> deps) so the train always
+#      starts from the current code of `main`.
+#   3. Squash-merges every green Dependabot PR whose base is `deps`
+#      (rebasing them on the `deps` head first when needed).
+#   4. Runs the real test suite on the updated `deps` head
+#      (same commands as ci-tests.yml).
+#   5. If tests pass, opens/updates a PR `deps -> main` and squash-merges it.
 #      (Note: merging to main triggers deploy-live.yml as usual.)
-#   5. If any PR could not be merged (conflict, red/pending checks) or the
-#      test suite fails, opens or updates a GitHub issue labeled
-#      `dependencies-merge-blocked` with the details. The issue is closed
-#      automatically on the next fully green run.
+#   6. Dispatches the deployment explicitly when needed, because a merge
+#      performed with GITHUB_TOKEN does not trigger workflow runs.
+#   7. If anything could not be completed (conflict, red/pending checks,
+#      failing test suite, infra error), opens or updates a GitHub issue
+#      labeled `dependencies-merge-blocked` with the details. The issue is
+#      closed automatically on the next fully green run.
 #
 # Can also be triggered manually from the Actions tab (workflow_dispatch).
 name: Dependencies — auto-merge
@@ -25,6 +30,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Needed to dispatch deploy-live.yml and to list its runs.
+  actions: write
 
 concurrency:
   group: deps-auto-merge
@@ -33,6 +40,7 @@ concurrency:
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
       BRANCH: deps
@@ -41,6 +49,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history: the workflow merges `main` into `deps` and compares
+          # both branches by ancestry.
+          fetch-depth: 0
 
       - name: Ensure `deps` branch exists
         run: |
@@ -55,11 +67,48 @@ jobs:
               -f sha="$main_sha"
           fi
 
+      - name: Sync `deps` with `main`
+        id: sync
+        run: |
+          set -euo pipefail
+
+          git fetch origin main "$BRANCH"
+
+          # Same content on both branches: nothing to sync.
+          if git diff --quiet origin/main "origin/$BRANCH"; then
+            echo "'$BRANCH' has the same content as main — nothing to sync."
+            exit 0
+          fi
+
+          # `main` is already contained in `deps`: nothing to sync either.
+          if git merge-base --is-ancestor origin/main "origin/$BRANCH"; then
+            echo "'$BRANCH' already contains main."
+            exit 0
+          fi
+
+          echo "Merging main into '$BRANCH' so the train starts from the current code."
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+
+          if ! git merge --no-edit --no-ff origin/main; then
+            git merge --abort || true
+            echo "::error::Merge conflict while syncing '$BRANCH' with main."
+            exit 1
+          fi
+
+          git push origin "$BRANCH"
+
       - name: Merge green Dependabot PRs into `deps`
         id: merge
         continue-on-error: true
+        env:
+          # Max time (seconds) spent waiting for a PR to become rebased and green.
+          WAIT_SECONDS: 900
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           blocked=""
           merged_any="false"
@@ -69,65 +118,103 @@ jobs:
             --base "$BRANCH" \
             --author "app/dependabot" \
             --state open \
-            --json number,title,mergeable,mergeStateStatus \
+            --json number,title,url,mergeable,mergeStateStatus \
             --limit 50)
 
           echo "Open Dependabot PRs:"
           echo "$prs"
 
           n=$(echo "$prs" | jq 'length')
-          for i in $(seq 0 $((n - 1))); do
+          # `seq 0 -1` is not portable (GNU seq prints nothing, BSD seq counts
+          # down), so the loop is guarded explicitly.
+          for i in $(seq 0 $((n > 0 ? n - 1 : 0))); do
+            [ "$n" -gt 0 ] || break
             num=$(echo "$prs" | jq -r ".[$i].number")
-            mergeable=$(echo "$prs" | jq -r ".[$i].mergeable")
-            state=$(echo "$prs" | jq -r ".[$i].mergeStateStatus")
             title=$(echo "$prs" | jq -r ".[$i].title")
+            url=$(echo "$prs" | jq -r ".[$i].url")
 
-            echo "::group::PR #$num — $title (mergeable=$mergeable, state=$state)"
+            echo "::group::PR #$num — $title ($url)"
+
+            # Rebase the PR on the current `deps` head when it is behind.
+            # GitHub computes mergeability asynchronously, so the state is
+            # polled until it is settled.
+            mergeable="UNKNOWN"
+            mstate="UNKNOWN"
+            deadline=$((SECONDS + 300))
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              state=$(gh pr view "$num" --repo "$GITHUB_REPOSITORY" \
+                --json mergeable,mergeStateStatus --jq '"\(.mergeable) \(.mergeStateStatus)"')
+              mergeable=${state%% *}
+              mstate=${state##* }
+              echo "mergeable=$mergeable state=$mstate"
+
+              if [ "$mergeable" = "UNKNOWN" ]; then
+                sleep 15
+                continue
+              fi
+
+              if [ "$mstate" = "BEHIND" ]; then
+                echo "PR is behind — requesting branch update."
+                old_head=$(gh pr view "$num" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+                gh pr update-branch "$num" --repo "$GITHUB_REPOSITORY" || true
+                # Wait for the update to land: the new head triggers a new CI run.
+                while [ "$SECONDS" -lt "$deadline" ]; do
+                  new_head=$(gh pr view "$num" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+                  if [ "$new_head" != "$old_head" ]; then
+                    echo "Branch updated: ${old_head:0:8} -> ${new_head:0:8}"
+                    break
+                  fi
+                  sleep 15
+                done
+                continue
+              fi
+
+              break
+            done
 
             # Conflict check (mergeable: MERGEABLE | CONFLICTING | UNKNOWN).
             if [ "$mergeable" != "MERGEABLE" ]; then
               echo "Not mergeable (mergeable=$mergeable) — marking blocked."
-              blocked="${blocked}- PR #${num} (${title}): merge conflict with the deps branch — Dependabot should rebase it automatically on its next run."$'\n'
+              blocked="${blocked}- PR #${num} (${title}): merge conflict with the ${BRANCH} branch — Dependabot should rebase it automatically on its next run. ${url}"$'\n'
               echo "::endgroup::"
               continue
             fi
 
             # Merge-state check.
-            case "$state" in
+            case "$mstate" in
               CLEAN|HAS_HOOKS)
                 : ;;
-              BEHIND)
-                echo "PR is behind — requesting branch update."
-                gh pr update-branch "$num" --repo "$GITHUB_REPOSITORY" || true
-                blocked="${blocked}- PR #${num} (${title}): not up to date with the ${BRANCH} branch (state: ${state}) — will be retried next run."$'\n'
-                echo "::endgroup::"
-                continue
-                ;;
               BLOCKED|UNSTABLE)
-                blocked="${blocked}- PR #${num} (${title}): required checks failing or missing (state: ${state}) — see the PR checks tab."$'\n'
+                blocked="${blocked}- PR #${num} (${title}): required checks failing or missing (state: ${mstate}) — see the PR checks tab. ${url}"$'\n'
                 echo "::endgroup::"
                 continue
                 ;;
               *)
-                blocked="${blocked}- PR #${num} (${title}): not mergeable (state: ${state})."$'\n'
+                blocked="${blocked}- PR #${num} (${title}): not mergeable (state: ${mstate}). ${url}"$'\n'
                 echo "::endgroup::"
                 continue
                 ;;
             esac
 
             # All reported checks must exist and be green before merging.
-            checks_out=$(gh pr checks "$num" --repo "$GITHUB_REPOSITORY" 2>&1) && checks_rc=0 || checks_rc=$?
-            if [ "$checks_rc" -eq 0 ] && ! grep -qiE "no (required )?checks" <<< "$checks_out"; then
-              echo "All checks green — squash-merging."
-              if gh pr merge "$num" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
-                merged_any="true"
-              else
-                blocked="${blocked}- PR #${num} (${title}): merge command failed (see workflow logs)."$'\n'
-              fi
-            else
+            # --watch waits for the checks of the current head (a rebase
+            # invalidates the previous run).
+            checks_out=$(timeout "$WAIT_SECONDS" gh pr checks "$num" --repo "$GITHUB_REPOSITORY" --watch --fail-fast 2>&1)
+            checks_rc=$?
+            echo "$checks_out"
+
+            if [ "$checks_rc" -ne 0 ] || grep -qiE "no (required )?checks" <<< "$checks_out"; then
               echo "Checks failing, pending, or absent — marking blocked."
-              echo "$checks_out"
-              blocked="${blocked}- PR #${num} (${title}): CI checks failing, pending, or not reported (the ci-tests workflow must run on PRs targeting the ${BRANCH} branch)."$'\n'
+              blocked="${blocked}- PR #${num} (${title}): CI checks failing, pending, or not reported (the ci-tests workflow must run on PRs targeting the ${BRANCH} branch). ${url}"$'\n'
+              echo "::endgroup::"
+              continue
+            fi
+
+            echo "All checks green — squash-merging."
+            if gh pr merge "$num" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+              merged_any="true"
+            else
+              blocked="${blocked}- PR #${num} (${title}): merge command failed (see workflow logs). ${url}"$'\n'
             fi
             echo "::endgroup::"
           done
@@ -143,14 +230,37 @@ jobs:
           echo "Blocked list:"
           echo "${blocked:-none}"
 
-      - name: Run test suite on `deps` (if anything merged)
+          # The step reports blocked PRs through its outputs, so it must not
+          # fail the job by itself.
+          exit 0
+
+      - name: Check whether `deps` has something to promote
+        id: pending
+        run: |
+          set -euo pipefail
+
+          git fetch origin main "$BRANCH"
+
+          # The comparison is done on the trees, not on the history: after a
+          # squash-merge `deps` is never an ancestor of `main` even though
+          # both hold the very same content. Comparing the trees avoids
+          # promoting an empty diff over and over.
+          if git diff --quiet origin/main "origin/$BRANCH"; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing to promote: '$BRANCH' and main hold the same content."
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+            echo "Pending promotion: '$BRANCH' differs from main."
+            git diff --stat origin/main "origin/$BRANCH"
+          fi
+
+      - name: Run test suite on `deps` (if something to promote)
         id: tests
-        if: steps.merge.outputs.merged_any == 'true'
+        if: steps.pending.outputs.promote == 'true'
         run: |
           set -euo pipefail
           git fetch origin "$BRANCH"
-          git checkout "$BRANCH"
-          git pull --ff-only origin "$BRANCH"
+          git checkout -B "$BRANCH" "origin/$BRANCH"
 
           docker compose build api
 
@@ -166,7 +276,8 @@ jobs:
           echo "tests_result=passed" >> "$GITHUB_OUTPUT"
 
       - name: Promote `deps` -> `main` (tests passed)
-        if: steps.merge.outputs.merged_any == 'true' && steps.tests.outputs.tests_result == 'passed'
+        id: promote
+        if: steps.pending.outputs.promote == 'true' && steps.tests.outputs.tests_result == 'passed'
         run: |
           set -euo pipefail
 
@@ -198,18 +309,53 @@ jobs:
 
           gh pr merge "$pr_num" --repo "$GITHUB_REPOSITORY" --squash
 
+      - name: Deploy `main` (a GITHUB_TOKEN merge does not trigger workflows)
+        id: deploy
+        if: steps.promote.outcome == 'success'
+        run: |
+          set -euo pipefail
+
+          new_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          echo "main is now at $new_sha"
+
+          # A merge performed with GITHUB_TOKEN does not emit a push event
+          # that would trigger deploy-live.yml, so the deployment has to be
+          # dispatched explicitly. If a push-triggered run does show up (e.g.
+          # when the merge is done with a PAT), it is left alone.
+          for _ in 1 2 3 4 5 6; do
+            existing_run=$(gh run list \
+              --workflow deploy-live.yml \
+              --branch main \
+              --event push \
+              --limit 10 \
+              --json headSha --jq "map(select(.headSha == \"$new_sha\")) | .[0] // empty")
+            if [ -n "$existing_run" ]; then
+              echo "A push-triggered deploy run already exists — nothing to dispatch."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          gh workflow run deploy-live.yml --ref main
+          echo "Dispatched deploy-live.yml on main."
+
       - name: Notify — open or update blocked issue
         # Runs when the job failed anywhere (including infra errors before
         # the merge step), OR when the job succeeded but some Dependabot
-        # PRs could not be merged (partial success).
+        # PRs could not be merged (partial success), OR when the deployment
+        # could not be dispatched.
         if: >-
           ${{
             failure() ||
-            (steps.merge.outcome != 'skipped' && steps.merge.outputs.blocked != 'none')
+            (steps.merge.outcome != 'skipped' && steps.merge.outputs.blocked != 'none') ||
+            (steps.deploy.outcome == 'failure')
           }}
         env:
           BLOCKED: ${{ steps.merge.outputs.blocked }}
+          SYNC_OUTCOME: ${{ steps.sync.outcome }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          PROMOTE_OUTCOME: ${{ steps.promote.outcome }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -219,6 +365,12 @@ jobs:
           reason="one or more Dependabot PRs could not be merged"
           if [ "$TESTS_OUTCOME" = "failure" ]; then
             reason="the test suite failed on the updated ${BRANCH} head"
+          elif [ "$SYNC_OUTCOME" = "failure" ]; then
+            reason="the ${BRANCH} branch could not be synced with main (merge conflict)"
+          elif [ "$PROMOTE_OUTCOME" = "failure" ]; then
+            reason="the promotion PR could not be created or merged — creating a PR with GITHUB_TOKEN requires the repository setting \"Allow GitHub Actions to create and approve pull requests\" to be enabled (Settings > Actions > General > Workflow permissions)"
+          elif [ "$DEPLOY_OUTCOME" = "failure" ]; then
+            reason="the deployment of main could not be dispatched"
           elif [ "$BLOCKED" = "none" ] || [ -z "$BLOCKED" ]; then
             reason="workflow infrastructure error — see the run logs"
           fi
@@ -275,7 +427,7 @@ jobs:
           fi
 
       - name: Close blocked issue on fully green run
-        if: success() && steps.merge.outputs.blocked == 'none'
+        if: success() && (steps.merge.outputs.blocked == 'none' || steps.merge.outputs.blocked == '')
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

@@ -6,6 +6,13 @@ on:
       - main
   workflow_dispatch:
 
+# Serialize deployments: a manual dispatch (used by the deps train, whose
+# GITHUB_TOKEN merge does not trigger the push event) must never overlap
+# with a push-triggered deployment.
+concurrency:
+  group: deploy-live
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
