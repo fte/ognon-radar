@@ -32,6 +32,9 @@ permissions:
   issues: write
   # Needed to dispatch deploy-live.yml and to list its runs.
   actions: write
+  # Needed to push the `.github/workflows/` files that the `deps` branch
+  # inherits from main (a GitHub App is refused without this scope).
+  workflows: write
 
 concurrency:
   group: deps-auto-merge
