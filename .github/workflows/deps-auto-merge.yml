@@ -93,10 +93,21 @@ jobs:
 
           git checkout -B "$BRANCH" "origin/$BRANCH"
 
-          if ! git merge --no-edit --no-ff origin/main; then
+          # `-X theirs`: when a hunk conflicts, main wins. `deps` is only a
+          # staging area for dependency bumps — the code of main must never be
+          # downgraded by a stale branch. A bump dropped by this resolution
+          # is re-proposed by Dependabot on the next batch.
+          if ! merge_out=$(git merge --no-edit --no-ff -X theirs origin/main 2>&1); then
+            echo "$merge_out"
             git merge --abort || true
-            echo "::error::Merge conflict while syncing '$BRANCH' with main."
+            echo "::error::Could not merge main into '$BRANCH'."
             exit 1
+          fi
+
+          echo "$merge_out"
+
+          if grep -q "CONFLICT" <<< "$merge_out"; then
+            echo "::warning::main won the conflicting hunks — a dependency bump may have been dropped (Dependabot re-proposes it on the next batch)."
           fi
 
           git push origin "$BRANCH"
@@ -366,7 +377,7 @@ jobs:
           if [ "$TESTS_OUTCOME" = "failure" ]; then
             reason="the test suite failed on the updated ${BRANCH} head"
           elif [ "$SYNC_OUTCOME" = "failure" ]; then
-            reason="the ${BRANCH} branch could not be synced with main (merge conflict)"
+            reason="the ${BRANCH} branch could not be synced with main"
           elif [ "$PROMOTE_OUTCOME" = "failure" ]; then
             reason="the promotion PR could not be created or merged — creating a PR with GITHUB_TOKEN requires the repository setting \"Allow GitHub Actions to create and approve pull requests\" to be enabled (Settings > Actions > General > Workflow permissions)"
           elif [ "$DEPLOY_OUTCOME" = "failure" ]; then
