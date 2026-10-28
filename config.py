@@ -120,6 +120,10 @@ class Settings:
         self.serp_probe_connect_timeout: float = serp_config.get('connect_timeout', 5.0)
         self.serp_probe_max_workers: int = serp_config.get('max_workers', 5)
 
+        # Seed URL health manager
+        seed_config = config.get('seed_health', {})
+        self.seed_refresh_interval: int = seed_config.get('refresh_interval', 900)
+
 
 # Global settings instance
 settings = Settings(os.getenv('APP_CONFIG_PATH', 'config.yaml'))

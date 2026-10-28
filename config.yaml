@@ -103,3 +103,8 @@ webhook:
   timeout: 10            # HTTP request timeout in seconds
   db_path: "data/webhooks.db"
   allow_insecure_urls: false  # Set true in dev to allow http:// webhook URLs
+
+# Seed URL health check (core/seeds.py)
+seed_health:
+  # Seconds between background re-probes of the configured seed_urls.
+  refresh_interval: 900
