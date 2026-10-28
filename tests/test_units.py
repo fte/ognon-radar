@@ -1370,13 +1370,19 @@ class TestSeedManager:
         """
         import core.seeds as seeds_mod
         from core.seeds import SeedManager
+        from types import SimpleNamespace
 
         # fresh module-level singleton fixture means start()/stop() lifecycle state
         sm = SeedManager()
         reachable = {}
+        # Replace the module attribute, NOT the object behind it: another test
+        # (test_api patches core.tor_client.tor_client) may leave a MagicMock
+        # bound here via `from core.tor_client import tor_client`.
         monkeypatch.setattr(
-            seeds_mod.tor_client, "check_reachable",
-            lambda url, **kwargs: reachable.get(url, False),
+            seeds_mod, "tor_client",
+            SimpleNamespace(
+                check_reachable=lambda url, **kwargs: reachable.get(url, False)
+            ),
         )
         sm._reachable = reachable  # tests mutate reachability via this map
         yield sm
@@ -1476,9 +1482,13 @@ class TestSeedManager:
         """start() honors seed_health.refresh_interval from config."""
         import core.seeds as seeds_mod
         from core.seeds import SeedManager
+        from types import SimpleNamespace
 
         monkeypatch.setattr(seeds_mod.settings, "seed_refresh_interval", 42, raising=False)
-        monkeypatch.setattr(seeds_mod.tor_client, "check_reachable", lambda url, **kw: False)
+        monkeypatch.setattr(
+            seeds_mod, "tor_client",
+            SimpleNamespace(check_reachable=lambda url, **kw: False),
+        )
         sm = SeedManager()
         try:
             sm.start()
