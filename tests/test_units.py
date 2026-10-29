@@ -6,6 +6,7 @@ They use tmp_path-backed SQLite and mock HTTP calls.
 """
 import json
 import logging
+import threading
 import time
 from unittest.mock import MagicMock, patch, call
 
@@ -1344,3 +1345,164 @@ class TestScreenshotProxy:
 
         with pytest.raises(RuntimeError, match="Invalid Tor proxy URL"):
             _resolve_proxy_url()
+
+
+# ── Seed health manager ─────────────────────────────────────────────────
+
+
+class TestSeedManager:
+    """Regression tests for core.seeds.SeedManager (PR #43).
+
+    The manager keeps only responsive seed URLs in rotation. These tests
+    exercise the rotation and refresh logic without Tor or real network
+    calls: tor_client.check_reachable is mocked.
+    """
+
+    _SEED_A = "http://" + "a" * 56 + ".onion"
+    _SEED_B = "http://" + "b" * 56 + ".onion"
+    _SEED_C = "http://" + "c" * 56 + ".onion"
+
+    @pytest.fixture()
+    def _seed_manager(self, _patch_config, monkeypatch):
+        """A fresh SeedManager with mockable reachability probes.
+
+        Always torn down via stop() so no refresh-loop thread outlives a test.
+        """
+        import core.seeds as seeds_mod
+        from core.seeds import SeedManager
+        from types import SimpleNamespace
+
+        # fresh module-level singleton fixture means start()/stop() lifecycle state
+        sm = SeedManager()
+        reachable = {}
+        # Replace the module attribute, NOT the object behind it: another test
+        # (test_api patches core.tor_client.tor_client) may leave a MagicMock
+        # bound here via `from core.tor_client import tor_client`.
+        monkeypatch.setattr(
+            seeds_mod, "tor_client",
+            SimpleNamespace(
+                check_reachable=lambda url, **kwargs: reachable.get(url, False)
+            ),
+        )
+        sm._reachable = reachable  # tests mutate reachability via this map
+        yield sm
+        sm.stop(timeout=2.0)
+
+    def test_fresh_instance_no_hang(self, _seed_manager):
+        """shutdown() terminates a running refresh loop.
+
+        Regression guard: the loop used an uninterruptible time.sleep(), so a
+        stop call could hang up to the full interval before returning.
+        """
+        _seed_manager._all = [self._SEED_A, self._SEED_B, self._SEED_C]
+        _seed_manager._healthy = list(_seed_manager._all)
+        _seed_manager._started = True
+        _seed_manager._refresh_interval = 60  # avoid spinning the loop fast
+        t = threading.Thread(target=_seed_manager._loop, name="seed-refresh-loop", daemon=True)
+        t.start()
+        # stop() must return promptly even though the loop is sleeping for 60s
+        _seed_manager.stop(timeout=5.0)
+        assert not t.is_alive()
+
+    def test_refresh_marks_unreachable_seed_stale(self, _seed_manager):
+        """Refresh filters out seeds whose probe fails."""
+        sm = _seed_manager
+        sm._all = [self._SEED_A, self._SEED_B, self._SEED_C]
+        sm._healthy = list(sm._all)
+        for u in sm._all:
+            sm._reachable[u] = (u != self._SEED_B)
+        sm.refresh(force=True)
+
+        assert self._SEED_B not in sm._healthy
+        assert set(sm._healthy) == {self._SEED_A, self._SEED_C}
+
+    def test_refresh_pool_many_seeds(self, _seed_manager):
+        """Pooling probes concurrently for more than _max_workers seeds."""
+        sm = _seed_manager
+        many = [f"http://{'d' * 55}{i}.onion" for i in range(10)]
+        sm._all = list(many)
+        sm._healthy = list(many)
+        for i, u in enumerate(many):
+            sm._reachable[u] = (i % 2 == 0)
+        sm.refresh(force=True)
+
+        # only every other seed survives the probe
+        assert len(sm._healthy) == 5
+
+    def test_get_seed_skips_unhealthy(self, _seed_manager):
+        """get_seed() never returns a seed dropped by refresh."""
+        sm = _seed_manager
+        sm._all = [self._SEED_A, self._SEED_B, self._SEED_C]
+        sm._healthy = list(sm._all)
+        for u in sm._all:
+            sm._reachable[u] = u != self._SEED_B
+        sm.refresh(force=True)
+
+        picks = {sm.get_seed() for _ in range(6)}
+        assert picks == {self._SEED_A, self._SEED_C}
+        assert self._SEED_B not in picks
+
+    def test_all_down_keeps_last_known_healthy(self, _seed_manager, caplog):
+        """A failed refresh must not rotate to an empty healthy list."""
+        sm = _seed_manager
+        sm._all = [self._SEED_A, self._SEED_B]
+        sm._healthy = [self._SEED_A]
+        sm._reachable[self._SEED_A] = False
+        sm._reachable[self._SEED_B] = False
+
+        with caplog.at_level(logging.WARNING, logger="core.seeds"):
+            sm.refresh(force=True)
+
+        assert sm._healthy == [self._SEED_A]  # last known healthy preserved
+        assert any("keeping the 1 previously-healthy" in r.message for r in caplog.records)
+
+    def test_all_down_from_empty_falls_back_to_full_list_with_warning(self, _seed_manager, caplog):
+        """Empty healthy set + dead probes → fallback to the full seed list.
+
+        The warning must say WHY the full list is back in rotation (no seed
+        responded) and what the impact is (slow starts possible), so the
+        operator can tell a probe outage from a seed outage.
+        """
+        sm = _seed_manager
+        sm._all = [self._SEED_A, self._SEED_B]
+        sm._healthy = []
+        sm._reachable[self._SEED_A] = False
+        sm._reachable[self._SEED_B] = False
+
+        with caplog.at_level(logging.WARNING, logger="core.seeds"):
+            sm.refresh(force=True)
+
+        assert sm._healthy == [self._SEED_A, self._SEED_B]  # full-list fallback
+        assert sm.get_seed() is not None  # rotation still yields a seed
+        fallback = [r for r in caplog.records if "falling back to the full list" in r.message]
+        assert fallback, f"expected the explicit fallback warning, got: {[r.message for r in caplog.records]}"
+        assert any("2 seed(s)" in r.message and "none responded" in r.message for r in fallback)
+
+    def test_uses_configured_refresh_interval(self, _patch_config, monkeypatch):
+        """start() honors seed_health.refresh_interval from config."""
+        import core.seeds as seeds_mod
+        from core.seeds import SeedManager
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(seeds_mod.settings, "seed_refresh_interval", 42, raising=False)
+        monkeypatch.setattr(
+            seeds_mod, "tor_client",
+            SimpleNamespace(check_reachable=lambda url, **kw: False),
+        )
+        sm = SeedManager()
+        try:
+            sm.start()
+            assert sm._refresh_interval == 42
+        finally:
+            sm.stop(timeout=2.0)
+
+    def test_start_no_seeds_then_still_stoppable(self, _patch_config, monkeypatch):
+        """start() without seed_urls stays a no-op loop-free lifecycle."""
+        import core.seeds as seeds_mod
+        from core.seeds import SeedManager
+
+        monkeypatch.setattr(seeds_mod.settings, "seed_urls", [], raising=False)
+        sm = SeedManager()
+        sm.start()
+        assert sm.get_seed() is None
+        sm.stop()  # no-op, must not raise

@@ -26,6 +26,7 @@ class SeedManager:
         self._check_connect_timeout = 4.0
         self._check_read_timeout = 10.0
         self._max_workers = 4
+        self._stop_event = threading.Event()
 
     def start(self) -> None:
         if self._started:
@@ -40,13 +41,42 @@ class SeedManager:
             if not self._healthy:
                 self._healthy = list(self._all)
         self._started = True
+        self._stop_event.clear()
         # Initial refresh in background so we don't block startup
         t = threading.Thread(target=self._initial_refresh, name="seed-refresh-init", daemon=True)
         t.start()
-        # Periodic refresh
+        # Periodic refresh (allows config overrides, e.g. for slower environments)
+        self._refresh_interval = getattr(
+            settings, "seed_refresh_interval", self._refresh_interval
+        )
         t2 = threading.Thread(target=self._loop, name="seed-refresh-loop", daemon=True)
         t2.start()
         logger.info(f"SeedManager started with {len(self._all)} seed(s)")
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Signal the background loop to exit and wait for it to finish.
+
+        The loop thread is non-daemon from a liveness standpoint only through
+        this event: it waits on the event with a timeout instead of sleeping,
+        so `stop()` wakes it immediately instead of waiting up to
+        `_refresh_interval` seconds for the sleep to expire.
+        """
+        if not self._started:
+            return
+        self._stop_event.set()
+        loop = next(
+            (t for t in threading.enumerate() if t.name == "seed-refresh-loop"),
+            None,
+        )
+        if loop is not None:
+            loop.join(timeout=timeout)
+            if loop.is_alive():
+                logger.warning(
+                    "Seed refresh loop did not stop within %.1fs; it is a "
+                    "daemon thread and will die with the process",
+                    timeout,
+                )
+        self._started = False
 
     def _initial_refresh(self) -> None:
         try:
@@ -55,8 +85,10 @@ class SeedManager:
             logger.debug(f"Initial seed refresh failed: {e}")
 
     def _loop(self) -> None:
-        while True:
-            time.sleep(self._refresh_interval)
+        while not self._stop_event.is_set():
+            # Event.wait instead of time.sleep so stop() breaks the wait at once
+            if self._stop_event.wait(self._refresh_interval):
+                break
             try:
                 if time.time() - self._last_refresh >= self._refresh_ttl:
                     self.refresh(force=False)
@@ -108,11 +140,24 @@ class SeedManager:
             else:
                 # Don't rotate to empty list on failure; keep last known healthy if any
                 if self._healthy:
-                    logger.warning("No seeds responded during refresh, keeping last known healthy list")
+                    logger.warning(
+                        "Seed refresh probed all %d seed(s) and none responded; "
+                        "keeping the %d previously-healthy seed(s) in rotation "
+                        "(they may also be down — rechecking next interval)",
+                        len(self._all),
+                        len(self._healthy),
+                    )
                 else:
                     # Fallback to all so we still try something
                     self._healthy = list(self._all)
-                    logger.warning("No seeds responded during refresh, falling back to all seeds")
+                    logger.warning(
+                        "Seed refresh probed all %d seed(s) and none responded; "
+                        "healthy set was empty so falling back to the full list "
+                        "of %d seed(s) — searches may start slow until the next "
+                        "refresh finds a responsive seed",
+                        len(self._all),
+                        len(self._all),
+                    )
             self._last_refresh = now
 
     def get_seed(self) -> Optional[str]:
