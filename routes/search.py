@@ -15,6 +15,7 @@ from core.auth import generate_client_id, require_api_key
 from core.crawler import is_valid_onion_url
 from core.job_manager import job_manager
 from core.rate_limiter import limiter
+from core.seeds import seed_manager
 from models.schemas import SearchRequest, JobCreatedResponse
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,12 @@ async def search_onion_sites(
                 detail="No start_url provided and no seed URLs configured in config.yaml. "
                        "Please provide a start_url in the request body or add seed_urls to config.yaml.",
             )
-        start_url = settings.seed_urls[0]
+        start_url = seed_manager.get_seed()
+        if not start_url:
+            raise HTTPException(
+                status_code=500,
+                detail="No usable seed URL configured/available",
+            )
         if not is_valid_onion_url(start_url):
             raise HTTPException(
                 status_code=500,

@@ -56,10 +56,24 @@ async def lifespan(app: FastAPI):
     client_key_store.startup()
     logger.info("Client key store initialized")
 
+    # Start seed health checker
+    try:
+        from core.seeds import seed_manager
+
+        seed_manager.start()
+    except Exception as e:
+        logger.warning(f"Failed to start seed manager: {e}")
+
     yield
 
     # Shutdown
     logger.info("Shutting down DarkWeb Search API...")
+    try:
+        from core.seeds import seed_manager
+
+        seed_manager.stop()
+    except Exception as e:
+        logger.debug(f"Seed manager stop skipped: {e}")
     job_manager.shutdown()
     webhook_manager.shutdown()
     tor_client.close()
